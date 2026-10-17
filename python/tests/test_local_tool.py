@@ -529,6 +529,35 @@ def test_an_allowed_host_still_cannot_post_or_see_the_account(env):
     assert not (env["sm"] / "account.json").exists()
 
 
+@pytest.mark.parametrize("value", ["https://x/", "x.example/path", "x.example:8443", "", "a b"])
+def test_allow_host_takes_a_bare_hostname_only(value, capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.parser().parse_args(["view", "--allow-host", value])
+    assert e.value.code == 2
+    assert "not a hostname" in capsys.readouterr().err
+
+
+def test_allow_host_is_normalized_and_repeatable():
+    args = cli.parser().parse_args(["view", "--allow-host", "MyHost.Example.", "--allow-host", "b.example"])
+    assert args.allow_host == ["myhost.example", "b.example"]
+
+
+def test_an_explicit_host_fails_on_a_busy_port_instead_of_moving(env, capsys, monkeypatch):
+    import socket
+
+    def _stop(_self: Any) -> None:
+        raise KeyboardInterrupt  # a server that moved to another port would otherwise run forever
+
+    monkeypatch.setattr(server_mod._Server, "serve_forever", _stop)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        rv = cli.main(["view", "--host", "127.0.0.1", "--port", str(port), "--no-open", "--no-build"])
+    assert rv == 1
+    assert f"can't listen on 127.0.0.1:{port}" in capsys.readouterr().err
+
+
 def test_server_picks_up_sessions_built_while_it_runs(env):
     """`view` serves first and scans in a background thread, so a Store held for
     the server's lifetime has to notice an index written underneath it."""
