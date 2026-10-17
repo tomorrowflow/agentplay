@@ -1,4 +1,4 @@
-"""Command line: ``agentplay [view|build|list|export|import|agents]``.
+"""Command line: ``agentplay [view|build|list|export|import|review|agents]``.
 
 Run with no arguments to build maps for your sessions and open the viewer.
 """
@@ -15,6 +15,7 @@ import sys
 import threading
 import warnings
 import webbrowser
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
@@ -249,15 +250,22 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- export / agents
+def _session_id(st: Store, sid: str) -> str | None:
+    """The stored session ``sid`` names (an id or a unique part of one), else None after saying why."""
+    if sid in st.index:
+        return sid
+    matches = [k for k in st.index if k.endswith(sid) or sid in k]
+    if len(matches) != 1:
+        print(f"agentplay: {'no' if not matches else 'several'} sessions match {sid!r}.", file=sys.stderr)
+        return None
+    return matches[0]
+
+
 def cmd_export(args: argparse.Namespace) -> int:
     st = Store()
-    sid = args.session
-    if sid not in st.index:
-        matches = [k for k in st.index if k.endswith(sid) or sid in k]
-        if len(matches) != 1:
-            print(f"agentplay: {'no' if not matches else 'several'} sessions match {sid!r}.", file=sys.stderr)
-            return 2
-        sid = matches[0]
+    sid = _session_id(st, args.session)
+    if sid is None:
+        return 2
     doc = st.get(sid)
     if doc is None:
         print("agentplay: map file missing; run `agentplay build --rebuild`.", file=sys.stderr)
@@ -302,6 +310,55 @@ def cmd_import(args: argparse.Namespace) -> int:
         n += 1
     st.save_index()
     print(f"Imported {n} map(s).")
+    return 0
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    from . import review
+
+    st = Store()
+    try:
+        pr = review.PullRequest.parse(args.pr)
+        if bool(args.base) != bool(args.head):
+            raise review.ReviewError("pass --base and --head together")
+        sessions = []
+        for raw in args.session or []:
+            sid = _session_id(st, raw)
+            if sid is None:
+                return 2
+            sessions.append(sid)
+        sessions = sessions or review.sessions_for(st, pr)
+        if not sessions:
+            raise review.ReviewError(f"no built session lists {pr.repo}#{pr.number}; name them with --session")
+        pull = {"base": args.base, "head": args.head, "url": pr.url} if args.base else review.github_pull(pr)
+        skipped = 0
+        if args.comments:
+            comments = review.load_comments(Path(args.comments))
+        else:
+            comments, skipped = review.github_comments(pr)
+        doc = review.build_review(
+            st, pr, sessions=sessions, checkout=review.Checkout(Path(args.repo_path)), pull=pull, comments=comments
+        )
+    except review.ReviewError as exc:
+        print(f"agentplay: {exc}", file=sys.stderr)
+        return 1
+    out = review.save_review(st, doc)
+    if args.json:
+        print(json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0
+    kinds = [c["attribution"] for c in doc["comments"]]
+    unknown = Counter(a["reason"] for a in kinds if a["kind"] == "unknown")
+    detail = ", ".join(f"{n} {reason.replace('_', ' ')}" for reason, n in unknown.most_common())
+    print(f"{_b(f'{pr.repo}#{pr.number}')}: {len(kinds)} comments, "
+          f"{len(kinds) - sum(unknown.values())} attributed to an edit, "
+          f"{sum(unknown.values())} unknown{f' ({detail})' if detail else ''}")
+    if skipped:
+        print(f"  {skipped} outdated or removed-line comments left out (they name no line at the PR head)")
+    bare = [sid for sid in sessions if st.evidence(sid) is None]
+    if bare:
+        print(f"  {len(bare)} of {len(sessions)} sessions have no edit evidence. Only Claude Code sessions "
+              f"record it; rebuild older maps with `agentplay build --rebuild`.")
+    print(f"Wrote {out}. It holds the comment text, stays on this machine, and is never exported.")
     return 0
 
 
@@ -365,6 +422,18 @@ def parser() -> argparse.ArgumentParser:
     im.add_argument("files", nargs="+", help=".json or .json.gz map files")
     im.add_argument("--title", help="title to show in the session list")
     im.set_defaults(fn=cmd_import)
+
+    rv = sub.add_parser("review", parents=[common],
+                        help="trace a PR's review comments to the session edits that wrote the lines")
+    rv.add_argument("--pr", required=True, help="the pull request, owner/repo#123")
+    rv.add_argument("--session", action="append",
+                    help="session id (or a unique part of one); repeatable. Default: sessions whose map lists the PR")
+    rv.add_argument("--repo-path", default=".", help="a local git checkout of the PR's repository (default: .)")
+    rv.add_argument("--comments", help="read comments from an agentplay-review-input/v1 file instead of GitHub")
+    rv.add_argument("--base", help="PR base commit (with --head; skips asking GitHub)")
+    rv.add_argument("--head", help="PR head commit (with --base)")
+    rv.add_argument("--json", action="store_true", help="print the review document")
+    rv.set_defaults(fn=cmd_review)
 
     a = sub.add_parser("agents", parents=[common], help="show which agents were found on this machine")
     a.set_defaults(fn=cmd_agents)

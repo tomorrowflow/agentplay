@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -137,3 +139,125 @@ def test_edit_evidence_is_removed_when_its_map_is_replaced_without_one(env, monk
     assert cli.main(["import", "s.json"]) == 0
     assert Store(env["sm"]).evidence(SID) is None
     assert not (env["sm"] / "evidence" / f"{st.index[SID]['key']}.json").exists()
+
+
+# ---------------------------------------------------------------- agentplay review
+def _comments(tmp: Path, comments: list[dict[str, Any]]) -> Path:
+    f = tmp / "comments.json"
+    f.write_text(json.dumps({"schema": "agentplay-review-input/v1", "comments": comments}))
+    return f
+
+
+def _review(env, capsys, comments: list[dict[str, Any]], *extra: str) -> tuple[int, dict[str, Any]]:
+    f = _comments(env["tmp"], comments)
+    rc = cli.main(["review", "--pr", "acme/app#7", "--session", STEM[-12:], "--repo-path", str(env["repo"]),
+                   "--comments", str(f), "--base", env["base"], "--head", env["head"], *extra])
+    capsys.readouterr()
+    path = env["sm"] / "reviews" / "acme_app_7.json"
+    return rc, json.loads(path.read_text()) if path.exists() else {}
+
+
+def test_review_attributes_comments_to_the_edit_that_wrote_the_line(env, capsys):
+    doc = Store(env["sm"]).get(SID)
+    edit, write, verify = _seq(doc, "Edit"), _seq(doc, "Write"), _seq(doc, "Bash")
+    rc, review = _review(env, capsys, [
+        {"id": "c1", "path": "src/app.py", "line": 2, "body": "Use math.fsum", "author": "rev"},
+        {"id": "c2", "path": "src/app.py", "line": 1, "body": "Rename this"},
+        {"id": "c3", "path": "src/app.py", "line": 40, "body": "Stale line"},
+        {"id": "c4", "path": "src/limits.py", "line": 2, "body": "Too short"},
+        {"id": "c5", "path": "src/gone.py", "line": 1, "body": "?"},
+        {"id": "c6", "path": "README.md", "line": 1, "body": "?"},
+    ])
+    assert rc == 0
+    assert review["schema"] == "agentplay-review/v1" and review["sessions"] == [SID]
+    assert review["pr"] == {"repo": "acme/app", "number": 7, "url": "https://github.com/acme/app/pull/7",
+                            "base": env["base"], "head": env["head"]}
+    got = {c["id"]: c["attribution"] for c in review["comments"]}
+    assert got == {
+        "c1": {"kind": "edit", "session": SID, "seq": edit, "agent": "main", "shared": False},
+        "c2": {"kind": "unknown", "reason": "not_observed"},
+        "c3": {"kind": "unknown", "reason": "line_out_of_range"},
+        "c4": {"kind": "edit", "session": SID, "seq": write, "agent": "main", "shared": False},
+        "c5": {"kind": "unknown", "reason": "file_not_in_head"},
+        "c6": {"kind": "unknown", "reason": "file_not_in_head"},
+    }
+    c1 = review["comments"][0]
+    assert (c1["body"], c1["author"], c1["source"]) == ("Use math.fsum", "rev", "file")
+    read = _seq(doc, "Read")
+    assert c1["causalPath"] == [
+        {"seq": read, "kind": "read", "label": "Read src/app.py"},
+        {"seq": edit, "kind": "edit", "label": "Edit src/app.py"},
+        {"seq": verify, "kind": "verify", "label": "pnpm test"},
+    ]
+    assert all(c["causalPath"] == [] for c in review["comments"] if c["attribution"]["kind"] == "unknown")
+
+
+def test_review_without_evidence_for_the_file_says_so(env, capsys):
+    (env["repo"] / "README.md").write_text("hello\n")
+    _git(env["repo"], "add", ".")
+    _git(env["repo"], "commit", "-qm", "readme")
+    env["head"] = _git(env["repo"], "rev-parse", "HEAD")
+    _, review = _review(env, capsys, [{"id": "c", "path": "README.md", "line": 1, "body": "?"}])
+    assert review["comments"][0]["attribution"] == {"kind": "unknown", "reason": "no_evidence"}
+
+
+def test_review_is_idempotent_and_stays_out_of_the_map(env, capsys):
+    comments = [{"id": "c1", "path": "src/app.py", "line": 2, "body": "SECRET-REVIEW-BODY"}]
+    _, first = _review(env, capsys, comments)
+    _, second = _review(env, capsys, comments)
+    assert {k: v for k, v in first.items() if k != "builtAt"} == {k: v for k, v in second.items() if k != "builtAt"}
+    assert [p.name for p in (env["sm"] / "reviews").iterdir()] == ["acme_app_7.json"]
+    st = Store(env["sm"])
+    assert "SECRET-REVIEW-BODY" not in (env["sm"] / "maps" / f"{st.index[SID]['key']}.json").read_text()
+
+
+def test_review_finds_the_sessions_that_opened_the_pr(env, capsys):
+    st = Store(env["sm"])
+    st.index[SID]["prs"] = [{"repo": "Acme/App", "number": 7, "url": "u", "state": "open"}]
+    st.save_index()
+    f = _comments(env["tmp"], [{"id": "c1", "path": "src/app.py", "line": 2, "body": "x"}])
+    assert cli.main(["review", "--pr", "acme/app#7", "--repo-path", str(env["repo"]), "--comments", str(f),
+                     "--base", env["base"], "--head", env["head"]]) == 0
+    assert "1 attributed to an edit" in capsys.readouterr().out
+    assert cli.main(["review", "--pr", "acme/app#8", "--repo-path", str(env["repo"]), "--comments", str(f),
+                     "--base", env["base"], "--head", env["head"]]) == 1
+    assert "no built session lists acme/app#8" in capsys.readouterr().err
+
+
+def test_review_reports_a_head_commit_the_checkout_lacks(env, capsys):
+    # A local origin, so the one fetch attempt fails here instead of reaching GitHub.
+    _git(env["repo"], "remote", "set-url", "origin", str(env["tmp"] / "no-such-remote"))
+    f = _comments(env["tmp"], [])
+    assert cli.main(["review", "--pr", "acme/app#7", "--session", STEM[-12:], "--repo-path", str(env["repo"]),
+                     "--comments", str(f), "--base", env["base"], "--head", "0" * 40]) == 1
+    err = capsys.readouterr().err
+    assert "000000000000 is not in" in err and "git fetch origin pull/7/head" in err
+    assert not (env["sm"] / "reviews").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in gh is a POSIX script")
+def test_review_reads_github_through_gh_when_asked(env, capsys, monkeypatch):
+    pull = {"base": {"sha": env["base"]}, "head": {"sha": env["head"]}, "html_url": "https://github.com/acme/app/pull/7"}
+    pages = [
+        [{"id": 1, "path": "src/app.py", "line": 2, "side": "RIGHT", "body": "b1", "user": {"login": "rev"},
+          "html_url": "https://github.com/acme/app/pull/7#discussion_r1"},
+         {"id": 2, "path": "src/app.py", "line": None, "original_line": 2, "body": "outdated"}],
+        [{"id": 3, "path": "src/app.py", "line": 1, "side": "LEFT", "body": "on a removed line"}],
+    ]
+    bin_dir = env["tmp"] / "bin"
+    bin_dir.mkdir()
+    (env["tmp"] / "pull.json").write_text(json.dumps(pull))
+    (env["tmp"] / "comments.json").write_text("".join(json.dumps(p) + "\n" for p in pages))
+    gh = bin_dir / "gh"
+    gh.write_text(f'#!/bin/sh\ncase "$*" in\n  *comments*) cat "{env["tmp"]}/comments.json" ;;\n'
+                  f'  "api repos/acme/app/pulls/7") cat "{env["tmp"]}/pull.json" ;;\n  *) exit 1 ;;\nesac\n')
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    assert cli.main(["review", "--pr", "acme/app#7", "--session", STEM[-12:], "--repo-path", str(env["repo"])]) == 0
+    out = capsys.readouterr().out
+    assert "1 comments, 1 attributed to an edit, 0 unknown" in out and "2 outdated or removed-line" in out
+    review = json.loads((env["sm"] / "reviews" / "acme_app_7.json").read_text())
+    (c,) = review["comments"]
+    assert (c["id"], c["author"], c["source"], c["url"]) == (
+        "1", "rev", "github", "https://github.com/acme/app/pull/7#discussion_r1")
+    assert c["attribution"]["kind"] == "edit"
