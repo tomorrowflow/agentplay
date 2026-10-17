@@ -138,15 +138,23 @@ def _hostname(value: str | None) -> str | None:
     return (f"[{host}]" if ":" in host else host) or None
 
 
-def _origin_hostname(origin: str) -> str | None:
-    """The hostname of an ``http(s)://host[:port]`` origin, None for anything else (``null`` included)."""
+def _origin_authority(origin: str) -> tuple[str, int | None] | None:
+    """``(hostname, port)`` of an ``http(s)://host[:port]`` origin, None for anything else (``null`` included)."""
     try:
         parts = urlsplit(origin.strip())
+        port = parts.port
     except ValueError:
         return None
     if parts.scheme.lower() not in ("http", "https") or parts.path or parts.query or parts.fragment:
         return None
-    return _hostname(parts.netloc)
+    host = _hostname(parts.netloc)
+    return (host, port) if host else None
+
+
+def _host_authority(value: str | None) -> tuple[str, int | None] | None:
+    """``(hostname, port)`` of a ``Host`` value, None if malformed."""
+    host = _hostname(value)
+    return (host, urlsplit(f"//{value}").port) if host else None
 
 
 def _with_task_titles(doc: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
@@ -296,9 +304,11 @@ class _Handler(BaseHTTPRequestHandler):
             return True
         if _hostname(self.headers.get("Host")) not in self.allowed_hosts:
             return False
+        # Same origin means the port too: with `--allow-host localhost` behind a
+        # tunnel, another local web app on another port must not count.
         origin = self.headers.get("Origin")
         return (origin is None or self._allowed_origin(origin)
-                or _origin_hostname(origin) in self.allowed_hosts)
+                or _origin_authority(origin) == _host_authority(self.headers.get("Host")))
 
     def _allowed_origin(self, origin: str | None) -> bool:
         """Whether ``origin`` is this server's own, or one listed in ``AGENTPLAY_DEV_ORIGINS``.

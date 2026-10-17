@@ -496,7 +496,7 @@ def test_an_allowed_host_reads_everything_from_any_peer(env, host):
         assert status == 200 and len(json.loads(body)["sessions"]) == 1
         status, body = request(f"/api/map-doc?id={urllib.request.quote(sid, safe='')}", {"Host": host})
         assert status == 200 and json.loads(body)["tasks"][0]["name"] == "please fix the SECRET-PROMPT bug"
-        same_site = {"Host": host, "Origin": "https://allowed.example:8443", "Sec-Fetch-Site": "same-origin"}
+        same_site = {"Host": host, "Origin": f"https://{host}", "Sec-Fetch-Site": "same-origin"}
         assert request("/api/status", same_site)[0] == 200
 
 
@@ -509,6 +509,7 @@ def test_an_allowed_host_reads_everything_from_any_peer(env, host):
     (ALLOWED, {"Host": "allowed.example", "Origin": "https://evil.example"}),
     (ALLOWED, {"Host": "allowed.example", "Origin": "https://allowed.example.evil.test"}),
     (ALLOWED, {"Host": "allowed.example", "Origin": "null"}),
+    (ALLOWED, {"Host": "allowed.example:7317", "Origin": "http://allowed.example:3000"}),  # another app, same name
     (ALLOWED, {"Host": "allowed.example", "Sec-Fetch-Site": "cross-site"}),
 ])
 def test_anything_else_from_a_remote_peer_reads_nothing(env, allowed, headers):
