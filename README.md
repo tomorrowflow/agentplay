@@ -307,6 +307,7 @@ All configuration is through environment variables. The examples in this README 
 | `AGENTPLAY_COPILOT_VSCODE_HOMES` | VS Code `User` dirs | Copilot in VS Code |
 | `AGENTPLAY_OPENCODE_HOMES` | `$XDG_DATA_HOME/opencode` | OpenCode data dirs |
 | `AGENTPLAY_KIRO_HOMES` | `~/.kiro` | Kiro homes |
+| `AGENTPLAY_REPO_ROOTS` | unset | comma-separated `<glob>=<owner/repo>` entries that map paths to a repo with no `.git` lookup, for worktrees deleted before the map is built: `/home/you/worktrees/wb-*=acme/app`. `*` matches within one path segment |
 | `AGENTPLAY_HMAC_KEY` | unset | key for `--path-mode hashed` |
 | `AGENTPLAY_DEV_ORIGINS` | unset | comma-separated extra origins the local server trusts, for the viewer's dev server: `http://localhost:5173` |
 | `NO_COLOR` | unset | disable terminal styling |
