@@ -6,7 +6,7 @@
 uvx agentplay
 ```
 
-That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. The only network call is an optional email signup in the viewer, described under [Privacy](#privacy); set `AGENTPLAY_NO_NETWORK=1` to switch it off.
+That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. The only network call agentplay makes on its own is an optional email signup in the viewer, described under [Privacy](#privacy); set `AGENTPLAY_NO_NETWORK=1` to switch it off. `agentplay review`, which you run yourself, can also read your PR's review comments from GitHub.
 
 ![The session explorer replaying a Claude Code session: a radial map of every file, tool, MCP server, subagent and model the session touched, the replay timeline underneath, and details on the right](docs/images/explorer-light.png)
 
@@ -19,6 +19,7 @@ That one command finds the agent sessions already on your machine, builds a reda
 - [Why this exists](#why-this-exists)
 - [Install](#install)
 - [Using the viewer](#using-the-viewer)
+- [Review loop](#review-loop)
 - [Supported agents](#supported-agents)
 - [Privacy](#privacy)
 - [Command reference](#command-reference)
@@ -118,6 +119,23 @@ In the viewer:
 
 Every view is a URL, so a link to a moment in a session reopens it for anyone who runs the viewer on the same data.
 
+## Review loop
+
+`agentplay review` traces the inline review comments on a pull request back to the session edit that wrote each commented line, on your machine.
+
+```bash
+agentplay build                                   # records edit evidence for Claude Code sessions
+agentplay review --pr acme/api#142 --repo-path ~/src/api
+agentplay view                                    # the Review tab now shows the comments, unlocked
+```
+
+- **Which sessions.** By default, the sessions whose map lists the PR as one they opened. Pass `--session <id>` (repeatable) to name them, for example every session that worked on a ticket over several rework rounds.
+- **Which comments.** By default, the PR's inline review comments, read from GitHub with the [`gh` CLI](https://cli.github.com/) (`gh api repos/<owner>/<repo>/pulls/<n>` and `.../comments`), using your own `gh` login. Comments GitHub marks outdated, or that sit on a removed line, name no line at the PR head and are left out. To use another review tool, or to stay offline, pass `--comments <file.json>` in the `agentplay-review-input/v1` shape (see [docs/format.md](docs/format.md#review-docs)) together with `--base <sha> --head <sha>`.
+- **How it attributes.** `agentplay build` keeps, for every successful Claude Code `Edit`, `MultiEdit` and `Write`, line hashes of what it changed. `review` reads the PR's base and head versions of each commented file from `--repo-path` with `git show`, replays the sessions' edits over the base in order, and reports which edit owns the commented head line. If the checkout lacks the PR head, it runs `git fetch origin pull/<n>/head` once. A comment on a line no observed edit wrote (human-written, present in the base, rewritten afterwards) is reported as unknown, with the reason.
+- **What you see.** In the viewer, each comment shows the edit it was traced to and a causal path: the reads, searches and edits on that file before it, and the first test or build after it. Picking a comment lights that path on the map and moves the playhead to the edit.
+
+Only Claude Code sessions record edit evidence so far. Maps built before this release have none; rebuild them with `agentplay build --rebuild`.
+
 ## Supported agents
 
 | Agent | Reads from (defaults) | Subagent lanes | Tokens | Notes |
@@ -140,7 +158,9 @@ agentplay was designed so that you can show a map to someone else without worryi
 
 **Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` and loads no remote fonts or scripts. It shows a few links to Entelligence (a banner, the welcome card, sample-review and "fix now" blocks); they open only when you click them, carry only a tag naming where you clicked (`?src=agentplay-viewer&from=banner`) and nothing from your sessions, and the viewer fetches nothing from them on its own. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
 
-**The one network call is your email, if you give it.** The first time the viewer opens, it offers to take your email so Entelligence can tell you about new features. If you type one in, agentplay sends Entelligence the event (signup, or later disconnect), that email, a random install id (generated once and kept in `~/.agentplay/account.json`, so it ties your signup and disconnect to the same install), its version number and the time, and nothing else: no session data, paths or repo names. "Continue without email" sends nothing. All of it is in one file, [`account.py`](python/src/agentplay/account.py); `grep -rn urllib.request python/src/` finds it and nothing else. You can disconnect from the top bar, which forgets the email locally and sends Entelligence one request to delete it; it is sent once and not retried, so if Entelligence can't be reached at that moment it may not arrive, and the email may stay on the list. `DO_NOT_TRACK=1` or `AGENTPLAY_NO_NETWORK=1` turns the offer off and blocks the request. Details: [docs/signup-endpoint.md](docs/signup-endpoint.md).
+**The one network call agentplay makes on its own is your email, if you give it.** The first time the viewer opens, it offers to take your email so Entelligence can tell you about new features. If you type one in, agentplay sends Entelligence the event (signup, or later disconnect), that email, a random install id (generated once and kept in `~/.agentplay/account.json`, so it ties your signup and disconnect to the same install), its version number and the time, and nothing else: no session data, paths or repo names. "Continue without email" sends nothing. All of it is in one file, [`account.py`](python/src/agentplay/account.py); `grep -rn urllib.request python/src/` finds it and nothing else. You can disconnect from the top bar, which forgets the email locally and sends Entelligence one request to delete it; it is sent once and not retried, so if Entelligence can't be reached at that moment it may not arrive, and the email may stay on the list. `DO_NOT_TRACK=1` or `AGENTPLAY_NO_NETWORK=1` turns the offer off and blocks the request. Details: [docs/signup-endpoint.md](docs/signup-endpoint.md).
+
+**`agentplay review` reads from GitHub when you run it.** It is the second network path, and it is never taken implicitly: only the `review` command, run by you, uses it. Without `--comments` it runs your installed `gh` CLI to read the PR's base and head commits and its inline review comments, and if your checkout lacks the PR head it runs `git fetch origin pull/<n>/head` once. Both use your own credentials and send nothing from your sessions. With `--comments` and `--base`/`--head`, and a checkout that already has both commits, it makes no network call at all.
 
 **A map document never contains:**
 
@@ -164,6 +184,8 @@ Repo names and remotes are kept in every path mode, so a reader can tell which p
 
 **Local-only extras.** The session list shows a title for each session: Claude Code's own title, or else the first 90 characters of your first prompt. Task labels in the viewer are the start of each prompt. Both live only in `~/.agentplay/index.json`, are never written into a map, and are only served to a viewer on the same machine; turn them off with `--no-titles`, which also clears what is already stored for the sessions that run sees. The flag is per run, not a saved preference, so a later build without it puts them back. Images you pasted into Claude Code prompts are read from the original transcript on demand by the local server, for a viewer on this machine only, and are never stored in a map, the index or an export. The same goes for the message and command of a failed hook: the map keeps which hook failed and what it ran after, and the viewer reads the text from the transcript only on this machine.
 
+**Edit evidence and review docs stay local.** For each Claude Code session, `agentplay build` also writes `~/.agentplay/evidence/<map>.json`: SHA-256 hashes of the lines each edit changed, with the edit's step number and repo-relative path. A hash of a short line can be guessed back by hashing candidates, so this file is never part of a map and `export` never includes it; it is written and deleted together with its map. `agentplay review` writes `~/.agentplay/reviews/<owner>_<repo>_<n>.json`, which holds the review comments' text and authors as GitHub or your input file gave them. The local server shows it only to a viewer on this machine, and it is never written into a map or an export.
+
 **Sharing.** `agentplay export <session>` writes a single map file and tells you which repo names and how many paths it contains. For anything you post publicly, rebuild with `--path-mode dirs_only`.
 
 The full contract, and the tests that enforce it, are described in [docs/format.md](docs/format.md#redaction-contract).
@@ -176,6 +198,7 @@ agentplay build       build maps for new or changed sessions
 agentplay list        list built sessions
 agentplay export      write one session's map to a .json or .json.gz file
 agentplay import      add map files (a teammate's, another machine's) to your local store
+agentplay review      trace a PR's review comments to the session edits that wrote the lines
 agentplay agents      show which agents were found on this machine
 ```
 
@@ -188,7 +211,12 @@ agentplay agents      show which agents were found on this machine
 | `--limit N` | build, view, list | newest N sessions |
 | `--no-titles` | build, view | don't keep local titles, and clear any already stored |
 | `--port 7317`, `--no-open`, `--no-build` | view | server options |
-| `--json` | build, list | machine-readable output |
+| `--json` | build, list, review | machine-readable output |
+| `--pr acme/api#142` | review | the pull request |
+| `--session <id>` | review | a session to attribute to (repeatable; default: sessions whose map lists the PR) |
+| `--repo-path <dir>` | review | a local git checkout of the PR's repository (default `.`) |
+| `--comments <file>` | review | read comments from an `agentplay-review-input/v1` file instead of GitHub |
+| `--base <sha>`, `--head <sha>` | review | the PR's base and head commits, instead of asking GitHub |
 
 ## The session map format
 
@@ -243,6 +271,7 @@ The format is deliberately independent of this tool. If you build an agent, an o
 | `python/src/agentplay/discover.py` | Where each agent keeps its sessions; builds the parser over them |
 | `python/src/agentplay/{store,pipeline}.py` | Incremental build into `~/.agentplay` |
 | `python/src/agentplay/server.py` | Local read-only API and static viewer |
+| `python/src/agentplay/review.py` | `agentplay review`: replays local edit evidence over a PR to attribute review comments |
 | `viewer/src/core/` | Pure TypeScript model: tree, radial layout, playback, signals, scopes, canvas painters. No React |
 | `viewer/src/explorer/` | The React explorer |
 | `viewer/src/data/` | `SessionMapSource` implementations: local server, dropped files, demo |

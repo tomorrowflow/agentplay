@@ -46,7 +46,7 @@ class PullRequest:
     def parse(cls, text: str) -> PullRequest:
         m = re.fullmatch(r"([\w.-]+/[\w.-]+)#(\d+)", text.strip())
         if not m:
-            raise ReviewError(f"can't read --pr {text!r}; use owner/repo#123")
+            raise ReviewError(f"can't read --pr {text!r}; use owner/repo#7")
         return cls(m.group(1), int(m.group(2)))
 
     @property

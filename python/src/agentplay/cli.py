@@ -425,7 +425,7 @@ def parser() -> argparse.ArgumentParser:
 
     rv = sub.add_parser("review", parents=[common],
                         help="trace a PR's review comments to the session edits that wrote the lines")
-    rv.add_argument("--pr", required=True, help="the pull request, owner/repo#123")
+    rv.add_argument("--pr", required=True, help="the pull request, owner/repo#7")
     rv.add_argument("--session", action="append",
                     help="session id (or a unique part of one); repeatable. Default: sessions whose map lists the PR")
     rv.add_argument("--repo-path", default=".", help="a local git checkout of the PR's repository (default: .)")

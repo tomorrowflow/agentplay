@@ -22,6 +22,7 @@ One map is one JSON object. Its machine-readable definition is [`schema/agentpla
 - [Outcomes](#outcomes)
 - [Content hash](#content-hash)
 - [Writing a producer](#writing-a-producer)
+- [Local-only companions](#local-only-companions): edit evidence and review docs, not part of `agentplay/v1`
 
 ## Redaction contract
 
@@ -227,3 +228,63 @@ To make your agent's sessions work with the viewer:
 2. Validate your maps against the JSON Schema.
 3. Keep to the redaction contract. If your agent's own logs contain text, drop it at the producer. Readers assume maps are safe to show.
 4. Open a map by dragging the file onto the viewer, or add it to your local store with `agentplay import map.json.gz` so it shows in your session list. For a new agent, the better path is a parser in this repo; see [CONTRIBUTING.md](../CONTRIBUTING.md#adding-an-agent).
+
+## Local-only companions
+
+The reference tool keeps two more kinds of document next to the maps. Neither is part of `agentplay/v1`: they break the redaction contract on purpose, so they stay on the machine that made them. `agentplay export` never includes them, the server shows them only to a viewer on that machine, and a map never points at them. Another producer or reader may ignore them entirely.
+
+### Edit evidence
+
+`$AGENTPLAY_HOME/evidence/<map key>.json`, one per Claude Code map, written and deleted together with the map:
+
+```jsonc
+{
+  "schema": "agentplay-evidence/v1",
+  "sessionId": "local:claude-code:5f2c…",
+  "edits": [
+    { "seq": 31, "agent": "main", "repo": "r0", "path": "src/middleware/rateLimit.ts",
+      "operation": "replace", "before": ["<sha256 of a line>", "…"], "after": ["…"] }
+  ]
+}
+```
+
+- One entry per observed change: an `Edit` is one entry per hunk of its recorded patch, a `Write` of a new file one `write` entry with every line.
+- `seq` and `agent` are the map event of the call. `repo` is the map's repo id and `path` the unredacted repo-relative path, whatever the map's path mode, so it lines up with a PR's file paths. Both are null for a file outside any repository.
+- `before` and `after` are SHA-256 hashes of whole lines. A short line's hash can be reversed by hashing candidates, which is why this is not in the map.
+
+### Review docs
+
+`agentplay review` reads comments from GitHub or from an input file:
+
+```jsonc
+{
+  "schema": "agentplay-review-input/v1",
+  "comments": [
+    { "id": "c1", "path": "src/orders.ts", "line": 38, "body": "…",
+      "author": "reviewer", "url": "https://…", "source": "my-review-bot", "createdAt": "2026-10-01T10:00:00Z" }
+  ]
+}
+```
+
+`path` (repo-relative), `line` (1-based, in the PR head) and `body` are required; the rest is optional. It writes `$AGENTPLAY_HOME/reviews/<owner>_<repo>_<n>.json`, overwritten on every run:
+
+```jsonc
+{
+  "schema": "agentplay-review/v1",
+  "pr": { "repo": "acme/api", "number": 142, "url": "https://github.com/acme/api/pull/142", "base": "<sha>", "head": "<sha>" },
+  "sessions": ["local:claude-code:5f2c…"],
+  "builtAt": "2026-10-17T10:00:00Z",
+  "comments": [
+    { "id": "c1", "url": null, "author": "reviewer", "source": "file", "path": "src/orders.ts", "line": 38, "body": "…",
+      "attribution": { "kind": "edit", "session": "local:claude-code:5f2c…", "seq": 40, "agent": "main", "shared": false },
+      "causalPath": [ { "seq": 15, "kind": "read", "label": "Read src/orders.ts" },
+                      { "seq": 40, "kind": "edit", "label": "Edit src/orders.ts" },
+                      { "seq": 44, "kind": "verify", "label": "pnpm test" } ] }
+  ]
+}
+```
+
+- **`attribution`** is either `{"kind": "edit", …}`, the session, map seq and agent of the edit that owns the commented head line after replaying the sessions' edit evidence over the PR base, or `{"kind": "unknown", "reason": …}`. `shared` is true when another listed session also inserted that exact line.
+- **Reasons:** `not_observed` (no observed edit wrote the line: it was in the base, or was written or rewritten outside the sessions), `ambiguous` (an edit inserted it but the replay cannot settle which one owns it), `line_out_of_range` (the head file has no such line), `file_not_in_head` and `no_evidence` (none of the sessions has edit evidence for that file).
+- **`causalPath`** comes from the attributed session's map alone, so it is content-free: up to five events of the same agent that touched the edited file up to and including the edit, then the first `verify` after it. `label` is the tool and the map's path, or the shell verb.
+- `body`, `author` and `url` are the comment as given. They live only in this file.
