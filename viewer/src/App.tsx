@@ -18,15 +18,8 @@ import { httpSource, probeServer } from '@/data/httpSource';
 import type { SessionMapSource } from '@/data/source';
 import { useSessionExplorerStatus } from '@/data/hooks';
 import { AccountChip, useAccount, WelcomeGate } from '@/app/AccountGate';
-import { PlatformBanner } from '@/app/PlatformBanner';
 import { useTheme } from '@/app/theme';
 import { useFileDrop } from '@/app/useFileDrop';
-import {
-  SAMPLE_QUERY,
-  SampleModeProvider,
-  showsOpenedFiles,
-  type SampleMode,
-} from '@/app/sampleMode';
 
 type Mode = 'probing' | 'server' | 'demo';
 
@@ -38,12 +31,7 @@ function serverBase(): string {
 }
 
 /** Local server if `/api/status` answers, else the bundled demo sessions.
- *
- * `?demo` still forces the demo, but it is read as a query param rather than
- * latched at mount, so "See sample" can switch into the demo and Back can
- * switch out of it -- both are just the URL changing. The probe runs either
- * way, because the answer is what tells us whether there are real sessions to
- * go back to. */
+ * `?demo` forces the demo. */
 function useProbedMode(base: string): Mode {
   const [mode, setMode] = useState<Mode>('probing');
   useEffect(() => {
@@ -71,21 +59,12 @@ export function App() {
   // bumped when files are added: `files.id` changes, this re-renders onto it
   const [, setFilesGen] = useState(0);
   const [notice, setNotice] = useState<OpenResult | null>(null);
-  // `demo` doubles as the sample switch: present means show the bundled
-  // sessions, absent means the user's own. `sample` is the reveal state of
-  // the locked block, kept in the URL so it survives the source swap.
-  // `sq` (the sessions search) and `win` (the time window) are here because
-  // they decide which sessions the explorer can select at all.
-  const [sampleQuery, setSampleQuery] = useQueryStates({
-    demo: parseAsString,
-    sample: parseAsString,
+  const [forceDemo] = useQueryState('demo', parseAsString);
+  const [, setSelection] = useQueryStates({
     session: parseAsString,
     view: parseAsString,
-    sq: parseAsString,
-    win: parseAsString,
   });
-  const sampleActive = sampleQuery.demo !== null;
-  const mode: Mode = sampleActive ? 'demo' : probed;
+  const mode: Mode = forceDemo !== null ? 'demo' : probed;
   const [windowKey, setWindowKey] = useQueryState(
     'win',
     parseAsStringEnum<WindowKey>([...WINDOW_KEYS]).withDefault('all')
@@ -99,48 +78,15 @@ export function App() {
       if (result.added.length) {
         setFilesGen((g) => g + 1);
         setShowFiles(true);
-        // Opening a file leaves the sample: it is the user replacing the
-        // view, and the sample now bypasses the file source rather than
-        // closing it, so leaving it in place would hide what they opened.
-        void setSampleQuery({
-          demo: null,
-          sample: null,
-          session: result.added[0],
-          view: null,
-        });
+        void setSelection({ session: result.added[0], view: null });
       }
     },
-    [files, setSampleQuery]
+    [files, setSelection]
   );
   const dragging = useFileDrop((f) => void openFiles(f));
 
-  const sampleMode = useMemo<SampleMode>(
-    () => ({
-      active: sampleActive,
-      canExit: probed === 'server',
-      // Pushed, not replaced: swapping the view out from under someone is
-      // only acceptable if the browser's own Back button undoes it. What the
-      // query clears, and why, is `SAMPLE_QUERY`. `showFiles` is deliberately
-      // left alone -- the sample bypasses an opened file (see `source` below)
-      // instead of closing it, so Back returns to the file-backed session.
-      show: () => void setSampleQuery(SAMPLE_QUERY, { history: 'push' }),
-      exit: () =>
-        void setSampleQuery({
-          demo: null,
-          sample: null,
-          session: null,
-          view: null,
-        }),
-    }),
-    [sampleActive, probed, setSampleQuery]
-  );
-
   const baseSource = mode === 'server' ? server : demo;
-  const openedFiles = showsOpenedFiles({
-    showFiles,
-    fileCount: files.size,
-    sampleActive,
-  });
+  const openedFiles = showFiles && files.size > 0;
   const source: SessionMapSource = openedFiles ? files : baseSource;
   const picker = (
     <>
@@ -166,7 +112,6 @@ export function App() {
   return (
     <div className="flex h-screen min-h-[700px] w-full flex-col gap-3 px-6 py-3">
       <SessionMapSourceProvider source={source}>
-        <SampleModeProvider value={sampleMode}>
         <AppBar
           mode={mode}
           source={source}
@@ -175,7 +120,6 @@ export function App() {
           baseLabel={baseSource.label}
           account={mode === 'server' ? <AccountChip base={base} state={account.data} /> : null}
         />
-        {mode !== 'probing' ? <PlatformBanner /> : null}
         {mode === 'demo' && source === demo ? (
           <Banner>
             Demo sessions. Run <code className="font-mono">uvx agentplay</code> (or{' '}
@@ -195,7 +139,6 @@ export function App() {
           />
         )}
         {mode === 'server' && source === server ? <WelcomeGate base={base} state={account.data} /> : null}
-        </SampleModeProvider>
       </SessionMapSourceProvider>
       {dragging ? <DropOverlay /> : null}
     </div>
