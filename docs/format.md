@@ -293,7 +293,7 @@ The reference tool keeps three more kinds of document next to the maps. None is 
 
 ### Factory digests
 
-`agentplay factory-digest` joins the maps of an OpenClaw software factory's sessions with the factory's Workboard cards (`openclaw workboard list --json`) and writes `$AGENTPLAY_HOME/digests/factory-<YYYY-MM-DD>.json`, a Markdown table beside it, and `factory-latest.json` and `.md` copies. A session belongs to a card when its transcript's project directory ends in `-wb-<cardId>`. A rerun on the same day overwrites that day's files.
+`agentplay factory-digest` joins the maps of an OpenClaw software factory's sessions with the factory's Workboard cards (`openclaw workboard list --json`) and writes `$AGENTPLAY_HOME/digests/factory-<YYYY-MM-DD>.json`, a Markdown table beside it, and `factory-latest.json` and `.md` copies. A session belongs to a card when its transcript's project directory ends in `-wb-<cardId>`. A rerun on the same day overwrites that day's files. With `--card`, the command prints the digest of the named cards (Markdown, or JSON with `--json`) and writes nothing; with `--out` as well, it writes `factory-cards-<YYYY-MM-DD>.json` and `.md` to that folder. Neither touches the nightly files.
 
 ```jsonc
 {

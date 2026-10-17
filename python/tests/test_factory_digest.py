@@ -424,6 +424,28 @@ def test_cli_writes_dated_and_latest_json_and_markdown(env, capsys):
     jsonschema.validate(printed, DIGEST_SCHEMA)
     assert [c["cardId"] for c in printed["cards"]] == [CARD_A]
     assert printed["cards"][0]["totals"]["peakContext"] == 42000
+    assert sorted(p.name for p in out.iterdir()) == sorted(
+        [*names, "factory-cards-2026-10-17.json", "factory-cards-2026-10-17.md"])
+    assert json.loads((out / "factory-cards-2026-10-17.json").read_text()) == printed
+    assert json.loads((out / "factory-latest.json").read_text()) == doc
+
+
+def test_card_prints_and_leaves_the_nightly_files_alone(env, capsys):
+    env["build"]({_stem(1): (_wb(CARD_A), [(_at(10, 1), "edit", 1)])})
+    cards = env["tmp"] / "cards.json"
+    cards.write_text(json.dumps({"cards": [_card(CARD_A, "Card A", [], published=_at(11, 0)),
+                                           _card(CARD_B, "Card B", [], published=_at(11, 0))]}))
+    digests = env["sm"] / "digests"
+    assert cli.main(["factory-digest", "--cards", str(cards), "--now", _iso(NOW)]) == 0
+    nightly = sorted(digests.iterdir())
+    capsys.readouterr()
+
+    assert cli.main(["factory-digest", "--cards", str(cards), "--now", _iso(NOW), "--card", CARD_B[:8]]) == 0
+    printed = capsys.readouterr().out
+    assert printed.startswith("# Factory digest") and "Card B" in printed and "Card A" not in printed
+    assert sorted(digests.iterdir()) == nightly
+    latest = json.loads((digests / "factory-latest.json").read_text())
+    assert [c["cardId"] for c in latest["cards"]] == [CARD_A, CARD_B]
 
 
 def test_cli_reads_stdin_and_defaults_to_the_store(env, monkeypatch, capsys):

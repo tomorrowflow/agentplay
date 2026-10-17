@@ -235,7 +235,7 @@ agentplay agents      show which agents were found on this machine
 | `--comments <file>` | review | read comments from an `agentplay-review-input/v1` file instead of GitHub |
 | `--base <sha>`, `--head <sha>` | review | the PR's base and head commits, instead of asking GitHub |
 | `--cards <file>` | factory-digest | `openclaw workboard list --json` output, or `-` for stdin |
-| `--days 7`, `--card <id>` | factory-digest | cards published in the last N days, or this card (repeatable, id prefix) |
+| `--days 7`, `--card <id>` | factory-digest | cards published in the last N days, or this card (repeatable, id prefix); `--card` prints the digest and writes `factory-cards-<date>` files only with `--out` |
 | `--out <dir>`, `--now <iso>` | factory-digest | output folder (default `~/.agentplay/digests`); end the window at this time |
 
 ## The session map format

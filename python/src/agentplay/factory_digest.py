@@ -513,12 +513,18 @@ def render_markdown(doc: FactoryDigest) -> str:
 
 
 # --------------------------------------------------------------------------- storage
-def save_digest(out_dir: Path, doc: FactoryDigest) -> Path:
-    """Write the day's digest and the ``factory-latest`` copies; a rerun on the same day overwrites."""
+def save_digest(out_dir: Path, doc: FactoryDigest, *, picked: bool = False) -> Path:
+    """Write the digest as JSON and Markdown; a rerun on the same day overwrites.
+
+    The nightly window writes the day's files and the ``factory-latest`` copies.
+    Cards picked with ``--card`` go to ``factory-cards-<date>`` so they never
+    replace the nightly ones.
+    """
     body = json.dumps(doc, indent=2, ensure_ascii=False).encode("utf-8")
     md = render_markdown(doc).encode("utf-8")
-    stem = f"factory-{doc['window']['to'][:10]}"
-    for name in (stem, "factory-latest"):
+    date = doc["window"]["to"][:10]
+    stems = [f"factory-cards-{date}"] if picked else [f"factory-{date}", "factory-latest"]
+    for name in stems:
         _atomic_write(out_dir / f"{name}.json", body)
         _atomic_write(out_dir / f"{name}.md", md)
-    return out_dir / f"{stem}.json"
+    return out_dir / f"{stems[0]}.json"

@@ -418,6 +418,15 @@ def cmd_factory_digest(args: argparse.Namespace) -> int:
     except fd.DigestError as exc:
         print(f"agentplay: {exc}", file=sys.stderr)
         return 1
+    if args.card:
+        if args.out:
+            out = fd.save_digest(Path(args.out), doc, picked=True)
+            print(f"Wrote {out} and {out.with_suffix('.md').name}.", file=sys.stderr)
+        if args.json:
+            print(json.dumps(doc, indent=2, ensure_ascii=False))
+        else:
+            print(fd.render_markdown(doc), end="")
+        return 0
     out = fd.save_digest(Path(args.out) if args.out else st.base / "digests", doc)
     if args.json:
         print(json.dumps(doc, indent=2, ensure_ascii=False))
@@ -517,7 +526,8 @@ def parser() -> argparse.ArgumentParser:
                      help="`openclaw workboard list --json` (or `show --json`) output; - reads stdin")
     fdg.add_argument("--days", type=int, default=7, help="cards published in the last N days (default 7)")
     fdg.add_argument("--card", action="append", metavar="ID",
-                     help="this card (an id or a unique prefix), whenever it was published; repeatable")
+                     help="this card (an id or a unique prefix), whenever it was published; repeatable. "
+                          "Prints the digest and writes files only with --out")
     fdg.add_argument("--out", metavar="DIR", help="output folder (default: $AGENTPLAY_HOME/digests)")
     fdg.add_argument("--now", metavar="ISO", help="end the window at this time instead of now")
     fdg.add_argument("--json", action="store_true", help="print the digest document")
