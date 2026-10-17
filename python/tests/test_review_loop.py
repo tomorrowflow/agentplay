@@ -172,6 +172,20 @@ def test_review_attributes_edits_made_in_a_removed_claude_worktree(env, capsys):
     _, review = _review(env, capsys, [{"id": "c1", "path": "src/app.py", "line": 2, "body": "Use math.fsum"}])
     assert review["comments"][0]["attribution"]["seq"] == _seq(doc, "Edit")
 
+def test_review_attributes_edits_made_in_a_deleted_configured_worktree(env, capsys, monkeypatch):
+    # A factory worktree is gone by build time and has no `.git` above it at all.
+    worktrees = env["tmp"] / "factory" / "worktrees"
+    monkeypatch.setenv("AGENTPLAY_REPO_ROOTS", f"{worktrees}/wb-*=acme/app")
+    _write_session(env["home"], worktrees / "wb-card42")
+    pipeline.build_all(agents={"claude-code"}, rebuild=True, store=Store(env["sm"]))
+    st = Store(env["sm"])
+    doc = st.get(SID)
+    assert [(r["name"], r["remote"]) for r in doc["repos"]] == [("app", "acme/app")]
+    assert [e["path"] for e in st.evidence(SID)["edits"]] == ["src/app.py", "src/limits.py"]
+    _, review = _review(env, capsys, [{"id": "c1", "path": "src/app.py", "line": 2, "body": "Use math.fsum"}])
+    assert review["comments"][0]["attribution"]["seq"] == _seq(doc, "Edit")
+
+
 def test_review_attributes_comments_to_the_edit_that_wrote_the_line(env, capsys):
     doc = Store(env["sm"]).get(SID)
     edit, write, verify = _seq(doc, "Edit"), _seq(doc, "Write"), _seq(doc, "Bash")
