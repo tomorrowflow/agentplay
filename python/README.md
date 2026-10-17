@@ -8,6 +8,6 @@ agentplay list           # list built sessions
 agentplay export <id>    # write one session's map to a file you can share
 ```
 
-There are no runtime dependencies, and your session data never leaves your machine. No account is required. The only network call is the optional email signup in the viewer, which sends the email, a random install id kept in `~/.agentplay/account.json`, the version and a timestamp; set `AGENTPLAY_NO_NETWORK=1` or `DO_NOT_TRACK=1` to switch it off. See the repository README for details.
+There are no runtime dependencies, and your session data never leaves your machine. No account is required, and agentplay makes no network call on its own. See the repository README for details.
 
 Full documentation: https://github.com/Entelligence-AI/agentplay

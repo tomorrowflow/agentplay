@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/popover';
 import { agentToolLabel, sessionTitle } from './SessionList';
 import { prCountLabel, prMenuItems } from '@/core/sessionLayout';
-import { connectUrl } from '@/core/entelligence';
 import { clockAt, dayLabel, outcomeMeta } from '@/core/sessionMapModel';
 
 interface Props {
@@ -169,19 +168,6 @@ function PrMenu({ prs }: { prs: SessionMap['prs'] }) {
             );
           })}
         </ul>
-        {/* One row under the PRs, not a block over them: every link above
-         * works offline, and this is the one thing that needs an account. */}
-        <a
-          href={connectUrl('pr-menu')}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-1 flex items-center gap-2 rounded-md border-t border-ds-border-subtlest px-3 pb-1.5 pt-2 ds-text-body-xs-medium text-ds-text-subtle hover:bg-ds-gray-subtlest focus-visible:bg-ds-gray-subtlest focus-visible:outline-none"
-        >
-          <span className="min-w-0 flex-1 truncate">
-            Trace review comments to the edits behind them
-          </span>
-          <ArrowSquareOut size={12} aria-hidden className="shrink-0" />
-        </a>
       </PopoverContent>
     </Popover>
   );

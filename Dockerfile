@@ -16,7 +16,6 @@ COPY --from=viewer /src/viewer/dist /src/python/src/agentplay/viewer
 RUN pip install --no-cache-dir --root-user-action=ignore /src/python && rm -rf /src \
     && useradd --uid 1000 --create-home agentplay
 ENV AGENTPLAY_HOME=/data \
-    AGENTPLAY_NO_NETWORK=1 \
     PYTHONUNBUFFERED=1
 USER agentplay
 EXPOSE 7317

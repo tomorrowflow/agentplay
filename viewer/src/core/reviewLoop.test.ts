@@ -74,10 +74,10 @@ describe('reviewLoopView', () => {
     });
   });
 
-  it('keeps the locked sample when there is no review, or no comment in one', () => {
-    expect(reviewLoopView({ data: [], isLoading: false })).toEqual({ kind: 'locked' });
-    expect(reviewLoopView({ data: [empty], isLoading: false })).toEqual({ kind: 'locked' });
-    expect(reviewLoopView({ data: undefined, isLoading: false })).toEqual({ kind: 'locked' });
+  it('shows none when there is no review, or no comment in one', () => {
+    expect(reviewLoopView({ data: [], isLoading: false })).toEqual({ kind: 'none' });
+    expect(reviewLoopView({ data: [empty], isLoading: false })).toEqual({ kind: 'none' });
+    expect(reviewLoopView({ data: undefined, isLoading: false })).toEqual({ kind: 'none' });
   });
 
   it('shows nothing while the answer is on its way', () => {

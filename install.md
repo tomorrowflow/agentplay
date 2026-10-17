@@ -21,7 +21,7 @@ DONE WHEN: `/api/status` on the port the viewer printed (for example `http://127
 
 - Ask me before installing anything system-wide (uv, pipx, a Python).
 - Do not change any agent's settings or files. agentplay only reads them.
-- Do not upload anything. agentplay makes no network calls with session data. The viewer may offer an optional email signup; leave that to me.
+- Do not upload anything. agentplay makes no network calls with session data.
 
 ## Pick a way to run agentplay
 
