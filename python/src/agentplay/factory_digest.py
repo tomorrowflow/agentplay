@@ -320,7 +320,7 @@ def metrics(events: list[dict[str, Any]]) -> Metrics:
         by_source[src] = by_source.get(src, 0) + 1
         by_class[cls] = by_class.get(cls, 0) + 1
     edits = [e for e in events if e["kind"] == "edit"]
-    verifies = [e for e in events if e["kind"] == "verify"]
+    verifies = [e for e in events if e["kind"] == "verify" and e.get("errClass") not in _DENIALS]
     after = [e for e in verifies if edits and e["seq"] > edits[-1]["seq"]]
     return {
         "peakContext": max((e["in"] + e["cw"] + e["cr"] for e in llm if e["agent"] == "main"), default=0),

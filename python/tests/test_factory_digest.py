@@ -35,7 +35,7 @@ def _iso(dt: datetime) -> str:
 
 
 # One step is (when, what, context tokens). `what` is a Bash command, "edit",
-# or "deny" (a Bash call the user refused).
+# "deny" (a refused `rm -rf build`) or "deny <command>" (that command, refused).
 Step = tuple[datetime, str, int]
 
 
@@ -54,9 +54,10 @@ def _write_session(home: Path, project: str, stem: str, steps: list[Step]) -> No
         if what == "edit":
             name, inp = "Edit", {"file_path": f"{cwd}/src/a{i}.py", "old_string": "a", "new_string": "b"}
         else:
-            name, inp = "Bash", {"command": "rm -rf build" if what == "deny" else what}
-        failed = what == "deny" or what.endswith("--fail")
-        out = "Permission denied: the user doesn't want to proceed" if what == "deny" else "ok"
+            name, inp = "Bash", {"command": "rm -rf build" if what == "deny" else what.removeprefix("deny ")}
+        denied = what == "deny" or what.startswith("deny ")
+        failed = denied or what.endswith("--fail")
+        out = "Permission denied: the user doesn't want to proceed" if denied else "ok"
         lines.append(rec(when, type="assistant", message={
             "id": f"m{i}", "model": "claude-sonnet-5-5", "role": "assistant",
             "usage": {"input_tokens": tokens, "output_tokens": 5},
@@ -228,6 +229,17 @@ def test_verify_after_last_edit_and_a_failing_last_verify(env):
     assert got["V3"] == ({"afterLastEdit": None, "verbsAfterLastEdit": [], "lastVerifyFailed": False}, [])
     assert got["V4"] == ({"afterLastEdit": True, "verbsAfterLastEdit": ["pytest"], "lastVerifyFailed": True},
                          ["verify-failed-last"])
+
+
+def test_a_refused_check_is_not_a_check_that_ran(env):
+    st = env["build"]({_stem(1): (_wb(CARD_A), [
+        (_at(10, 1), "edit", 1), (_at(10, 2), "pytest", 1), (_at(10, 3), "edit", 1), (_at(10, 4), "deny pytest", 1),
+    ])})
+    doc = _digest(st, [_card(CARD_A, "A", [_attempt("a", "failed", _at(10, 0), _at(10, 30))], published=_at(11, 0))])
+    card = _by_id(doc)[CARD_A]
+    assert card["totals"]["verify"] == {"afterLastEdit": False, "verbsAfterLastEdit": [], "lastVerifyFailed": False}
+    assert card["totals"]["stops"]["permissionDenied"] == 1
+    assert card["flags"] == ["no-verify-after-edit", "stopped-on-permission"]
 
 
 # ---------------------------------------------------------------- fidelity
