@@ -7,7 +7,7 @@ import {
   type SessionMap,
 } from '@/core/schema';
 import { SessionExplorerError } from './errors';
-import { parseMapBytes } from './parse';
+import { parseMapBytes, parseReviews } from './parse';
 import { SESSION_MAP_BATCH_MAX, type SessionMapSource } from './source';
 
 async function failure(r: Response, what: string): Promise<SessionExplorerError> {
@@ -102,6 +102,12 @@ export function httpSource(baseUrl: string): SessionMapSource {
       const r = await get(`/api/hook-detail?${qs.toString()}`);
       if (!r.ok) throw await failure(r, 'hookDetail');
       return hookDetailResponseSchema.parse(await json(r, 'hookDetail'));
+    },
+    async reviews(sessionId) {
+      const qs = new URLSearchParams({ id: sessionId });
+      const r = await get(`/api/reviews?${qs.toString()}`);
+      if (!r.ok) throw await failure(r, 'reviews');
+      return parseReviews(await json(r, 'reviews'));
     },
     promptImageUrl(sessionId, turn, i) {
       const qs = new URLSearchParams({

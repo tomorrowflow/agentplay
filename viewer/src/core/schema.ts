@@ -190,6 +190,78 @@ export const hookDetailResponseSchema = z
   .passthrough();
 export type HookDetailResponse = z.infer<typeof hookDetailResponseSchema>;
 
+// --- review docs ------------------------------------------------------------
+// Written by `agentplay review` and served by `GET /api/reviews` on this
+// machine only. Not part of `agentplay/v1`: a review doc holds PR comment
+// text, which a map never carries.
+
+export const REVIEW_SCHEMA_V1 = 'agentplay-review/v1';
+
+export const UNKNOWN_ATTRIBUTION_REASONS = [
+  'not_observed',
+  'ambiguous',
+  'line_out_of_range',
+  'file_not_in_head',
+  'no_evidence',
+] as const;
+
+/** Which edit wrote the commented head line, or why that is not known. */
+export const reviewAttributionSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('edit'),
+    session: z.string(),
+    seq: z.number().int(),
+    agent: z.string(),
+    /** another session also inserted this exact line */
+    shared: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal('unknown'),
+    reason: z.enum(UNKNOWN_ATTRIBUTION_REASONS),
+  }),
+]);
+export type ReviewAttribution = z.infer<typeof reviewAttributionSchema>;
+
+export const reviewCommentSchema = z
+  .object({
+    id: z.string(),
+    url: z.string().nullable().catch(null).default(null),
+    author: z.string().nullable().catch(null).default(null),
+    source: z.string().nullable().catch(null).default(null),
+    path: z.string(),
+    line: z.number().int(),
+    body: z.string(),
+    attribution: reviewAttributionSchema,
+    /** content-free steps from the attributed session's map */
+    causalPath: z
+      .array(z.object({ seq: z.number().int(), kind: z.string(), label: z.string() }))
+      .default([]),
+  })
+  .passthrough();
+export type ReviewComment = z.infer<typeof reviewCommentSchema>;
+
+export const reviewDocSchema = z
+  .object({
+    schema: z.literal(REVIEW_SCHEMA_V1),
+    pr: z.object({
+      repo: z.string(),
+      number: z.number().int(),
+      url: z.string(),
+      base: z.string(),
+      head: z.string(),
+    }),
+    sessions: z.array(z.string()),
+    builtAt: z.string(),
+    comments: z.array(reviewCommentSchema),
+  })
+  .passthrough();
+export type ReviewDoc = z.infer<typeof reviewDocSchema>;
+
+/** `GET /api/reviews`: the envelope only; each doc is parsed on its own (`parseReviews`). */
+export const reviewsResponseSchema = z
+  .object({ success: z.boolean().optional(), reviews: z.array(z.unknown()).default([]) })
+  .passthrough();
+
 export const isMapFound = (
   item: SessionExplorerMapItem
 ): item is SessionExplorerMapMeta =>
