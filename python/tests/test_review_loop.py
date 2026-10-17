@@ -180,7 +180,7 @@ def test_review_attributes_comments_to_the_edit_that_wrote_the_line(env, capsys)
     got = {c["id"]: c["attribution"] for c in review["comments"]}
     assert got == {
         "c1": {"kind": "edit", "session": SID, "seq": edit, "agent": "main", "shared": False},
-        "c2": {"kind": "unknown", "reason": "not_observed"},
+        "c2": {"kind": "unknown", "reason": "base"},
         "c3": {"kind": "unknown", "reason": "line_out_of_range"},
         "c4": {"kind": "edit", "session": SID, "seq": write, "agent": "main", "shared": False},
         "c5": {"kind": "unknown", "reason": "file_not_in_head"},
@@ -295,3 +295,62 @@ def test_reviews_endpoint_serves_the_docs_that_list_a_session(env, capsys):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# ---------------------------------------------------------------- attribution reasons
+class _Files:
+    """A checkout stand-in: one path's content at the base ("b") and head ("h") commits."""
+
+    def __init__(self, base: str | None, head: str) -> None:
+        self.files = {"b": base, "h": head}
+
+    def show(self, sha: str, path: str) -> str | None:
+        return self.files[sha]
+
+
+def _edit(sid: str, seq: int, before: list[str], after: list[str]) -> dict[str, Any]:
+    return {"session_id": sid, "event_id": seq, "agent": "main", "operation": "replace",
+            "before": line_fingerprints("".join(f"{x}\n" for x in before)),
+            "after": line_fingerprints("".join(f"{x}\n" for x in after))}
+
+
+def _attr(base: str | None, head: str, edits: list[dict[str, Any]], line: int) -> dict[str, Any]:
+    from agentplay import review
+
+    return review._attribute({"path": "f", "line": line, "body": ""}, _Files(base, head),
+                             {"base": "b", "head": "h"}, edits)
+
+
+def _owned(sid: str, seq: int, shared: bool = False) -> dict[str, Any]:
+    return {"kind": "edit", "session": sid, "seq": seq, "agent": "main", "shared": shared}
+
+
+def test_an_untouched_base_line_is_base_even_when_an_edit_inserted_the_same_text():
+    base, head = "def f():\n    pass\n}\n", "def f():\n    pass\n}\nif x:\n    y()\n}\n"
+    edits = [_edit("s1", 7, ["}"], ["}", "if x:", "    y()", "}"])]
+    assert _attr(base, head, edits, 3) == {"kind": "unknown", "reason": "base"}
+    assert _attr(base, head, edits, 6) == _owned("s1", 7)
+
+
+def test_shared_needs_another_session_placed_over_the_same_line():
+    base, head = "A\n}\nB\n}\n", "A\n}\nQ\n}\nB\nR\n}\n"
+    edits = [_edit("s1", 7, ["A", "}", "B"], ["A", "}", "Q", "}", "B"]), _edit("s2", 9, ["B", "}"], ["B", "R", "}"])]
+    assert [_attr(base, head, edits, n) for n in (3, 4, 6, 7)] == [
+        _owned("s1", 7), _owned("s1", 7), _owned("s2", 9), {"kind": "unknown", "reason": "base"}]
+
+
+def test_a_line_another_session_wrote_first_is_shared():
+    edits = [_edit("s2", 3, ["a", "old"], ["a", "draft"]), _edit("s1", 7, ["draft"], ["final"])]
+    assert _attr("a\nold\n", "a\nfinal\n", edits, 2) == _owned("s1", 7, shared=True)
+
+
+def test_the_same_edit_in_two_sessions_is_ambiguous():
+    edits = [_edit("s1", 7, ["a", "old"], ["a", "new"]), _edit("s2", 9, ["a", "old"], ["a", "new"])]
+    assert _attr("a\nold\n", "a\nnew\n", edits, 2) == {"kind": "unknown", "reason": "ambiguous"}
+
+
+def test_a_line_from_an_edit_the_replay_could_not_place_is_unplaced():
+    base, head = "x\nret\nx\nret\n", "x\nret\nNEW\nx\nret\n"
+    edits = [_edit("s1", 7, ["ret"], ["ret", "NEW"])]
+    assert _attr(base, head, edits, 3) == {"kind": "unknown", "reason": "unplaced"}
+    assert _attr(base, head + "HUMAN\n", edits, 6) == {"kind": "unknown", "reason": "not_observed"}

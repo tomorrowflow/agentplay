@@ -22,7 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ._core.code_authorship import inserted_hashes, line_fingerprints, replay_owners
 from .store import Store, _atomic_write
@@ -31,6 +31,10 @@ REVIEW_SCHEMA = "agentplay-review/v1"
 INPUT_SCHEMA = "agentplay-review-input/v1"
 CAUSAL_STEPS = 5
 _TOUCH_KINDS = ("read", "search", "edit")
+
+UnknownReason = Literal[
+    "base", "not_observed", "ambiguous", "unplaced", "line_out_of_range", "file_not_in_head", "no_evidence"
+]
 
 
 class ReviewError(Exception):
@@ -228,29 +232,33 @@ def _observed_edits(
     return by_path
 
 
+def _unknown(reason: UnknownReason) -> dict[str, Any]:
+    return {"kind": "unknown", "reason": reason}
+
+
 def _attribute(
     comment: dict[str, Any], checkout: Checkout, pull: dict[str, str], edits: list[dict[str, Any]]
 ) -> dict[str, Any]:
     head = checkout.show(pull["head"], comment["path"])
     if head is None:
-        return {"kind": "unknown", "reason": "file_not_in_head"}
+        return _unknown("file_not_in_head")
     final = line_fingerprints(head)
     index = comment["line"] - 1
     if not 0 <= index < len(final):
-        return {"kind": "unknown", "reason": "line_out_of_range"}
+        return _unknown("line_out_of_range")
     if not edits:
-        return {"kind": "unknown", "reason": "no_evidence"}
+        return _unknown("no_evidence")
     base = checkout.show(pull["base"], comment["path"])
-    surviving, _, _ = replay_owners(base, head, edits)
-    inserted = inserted_hashes(edits, base is None)
-    owner = surviving.get(index)
-    if owner is None:
-        observed = any(final[index] in hashes for hashes in inserted.values())
-        return {"kind": "unknown", "reason": "ambiguous" if observed else "not_observed"}
-    sid, seq = owner
+    replay = replay_owners(base, head, edits)
+    line = replay.lines.get(index)
+    if line is None:
+        unplaced = inserted_hashes(replay.unplaced, base is None)
+        return _unknown("unplaced" if any(final[index] in h for h in unplaced.values()) else "not_observed")
+    if line.owner is None:
+        return _unknown("ambiguous" if line.writers else "base")
+    sid, seq = line.owner
     agent = next(e["agent"] for e in edits if e["session_id"] == sid and e["event_id"] == seq)
-    claimants = {sid} | {other for other, hashes in inserted.items() if final[index] in hashes}
-    return {"kind": "edit", "session": sid, "seq": seq, "agent": agent, "shared": len(claimants) > 1}
+    return {"kind": "edit", "session": sid, "seq": seq, "agent": agent, "shared": bool(line.writers - {sid})}
 
 
 def _label(e: dict[str, Any], files: dict[int, str]) -> str:

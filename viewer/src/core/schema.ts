@@ -198,8 +198,10 @@ export type HookDetailResponse = z.infer<typeof hookDetailResponseSchema>;
 export const REVIEW_SCHEMA_V1 = 'agentplay-review/v1';
 
 export const UNKNOWN_ATTRIBUTION_REASONS = [
+  'base',
   'not_observed',
   'ambiguous',
+  'unplaced',
   'line_out_of_range',
   'file_not_in_head',
   'no_evidence',
@@ -212,7 +214,7 @@ export const reviewAttributionSchema = z.discriminatedUnion('kind', [
     session: z.string(),
     seq: z.number().int(),
     agent: z.string(),
-    /** another session also inserted this exact line */
+    /** another session's edit was also placed over this line */
     shared: z.boolean(),
   }),
   z.object({

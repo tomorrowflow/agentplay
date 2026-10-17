@@ -23,8 +23,10 @@ export function reviewLoopView(query: {
 }
 
 const UNKNOWN_LABEL: Record<Extract<ReviewAttribution, { kind: 'unknown' }>['reason'], string> = {
-  not_observed: 'Not written by an observed edit',
-  ambiguous: 'More than one session wrote this line',
+  base: 'Unchanged from the PR base',
+  not_observed: 'No recorded edit wrote this line',
+  ambiguous: 'Several sessions made this same edit',
+  unplaced: 'A recorded edit here could not be replayed',
   line_out_of_range: 'Line is not in the PR head',
   file_not_in_head: 'File is not in the PR head',
   no_evidence: 'No edit evidence for this file',
