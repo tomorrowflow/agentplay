@@ -389,12 +389,10 @@ def _attempt_digest(a: Attempt, slice_: list[Timed]) -> AttemptDigest:
 def card_flags(totals: Metrics | None, attempts: list[AttemptDigest]) -> list[Flag]:
     if totals is None:
         return ["no-transcript"]
-    last = max(attempts, key=lambda a: a["startedAt"], default=None)
-    stops = last["metrics"]["stops"] if last and last["metrics"] else {"permissionDenied": 0, "blocked": 0}
     raised: dict[Flag, bool] = {
         "no-verify-after-edit": totals["verify"]["afterLastEdit"] is False,
         "verify-failed-last": totals["verify"]["lastVerifyFailed"] is True,
-        "stopped-on-permission": stops["permissionDenied"] + stops["blocked"] > 0,
+        "stopped-on-permission": any(a["transcriptOutcome"] == "blocked" for a in attempts),
         "attempt-fidelity-mismatch": any(a["fidelity"] == "mismatch" for a in attempts),
         "no-transcript": False,
     }
