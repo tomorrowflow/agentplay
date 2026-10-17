@@ -139,7 +139,7 @@ Only Claude Code sessions record edit evidence so far. Maps built before this re
 
 ## Run as a service (Docker)
 
-On a Linux host you can keep the viewer running in a container and open it from your other machines over Tailscale. The container reads Claude Code's home read-only, writes maps to your usual `~/.agentplay`, and scans for new sessions every ten minutes.
+On a Linux host you can keep the viewer running in a container and open it from your other machines over Tailscale. The container reads your home directory read-only (Claude Code's transcripts, and the repos they edited, at the same paths as on the host; narrow it with `CODE_ROOT`), writes maps to your usual `~/.agentplay`, and scans for new sessions every ten minutes.
 
 ```bash
 cp .env.example .env        # set AGENTPLAY_PUBLIC_HOST, UID and GID
