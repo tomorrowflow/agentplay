@@ -26,6 +26,7 @@ goes through the shared ``LocalSource`` spans (``build_map_from_spans``).
 from __future__ import annotations
 
 import configparser
+import fnmatch
 import hashlib
 import hmac
 import json
@@ -166,18 +167,44 @@ def _cost_from_events(model: str | None, events: list[dict[str, Any]]) -> float 
     return round(total, 6)
 
 
+RepoRoot = tuple[tuple[str, ...], str]
+
+
+def parse_repo_roots(value: str) -> tuple[RepoRoot, ...]:
+    """Parse ``AGENTPLAY_REPO_ROOTS``: comma-separated ``<glob>=<owner/repo>`` entries."""
+    roots: list[RepoRoot] = []
+    for entry in (e.strip() for e in value.split(",")):
+        if not entry:
+            continue
+        glob, sep, slug = (s.strip() for s in entry.partition("="))
+        glob = os.path.expanduser(glob)
+        owner, _, name = slug.partition("/")
+        if not sep or not glob or not os.path.isabs(glob) or not owner or not name or "/" in name:
+            raise ValueError(f"AGENTPLAY_REPO_ROOTS: bad entry {entry!r}, expected <absolute glob>=<owner/repo>")
+        roots.append((Path(glob).parts, slug))
+    return tuple(roots)
+
+
 class RepoResolver:
     """Maps absolute paths to ``(repo_root, repo_name, remote_slug)`` without spawning git.
 
-    Reads ``.git`` (directory or worktree pointer file) and the ``origin`` url
-    from the git config directly; results are cached per directory.
+    Configured roots (``AGENTPLAY_REPO_ROOTS``) win, so paths in a deleted worktree
+    still belong to their repo. Otherwise reads ``.git`` (directory or worktree
+    pointer file) and the ``origin`` url from the git config directly; results are
+    cached per directory.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, roots: tuple[RepoRoot, ...] | None = None) -> None:
+        self._roots = parse_repo_roots(os.environ.get("AGENTPLAY_REPO_ROOTS", "")) if roots is None else roots
         self._cache: dict[str, tuple[str, str, str] | None] = {}
 
     def resolve(self, path: str) -> tuple[str, str, str] | None:
         p = Path(path)
+        parts = p.parts
+        for pattern, slug in self._roots:
+            n = len(pattern)
+            if len(parts) >= n and all(fnmatch.fnmatchcase(a, b) for a, b in zip(parts, pattern, strict=False)):
+                return (str(Path(*parts[:n])), slug.rsplit("/", 1)[-1], slug)
         d = p if p.is_dir() else p.parent
         seen: list[str] = []
         result: tuple[str, str, str] | None = None

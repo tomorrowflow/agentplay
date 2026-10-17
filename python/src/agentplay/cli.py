@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
-from . import __version__, discover, pipeline
+from . import __version__, builder, discover, pipeline
 from .store import Store
 
 _TTY = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -512,6 +512,11 @@ def main(argv: list[str] | None = None) -> int:
         warnings.simplefilter("ignore")
     if not getattr(args, "fn", None):
         args = ap.parse_args(["view", *(argv or sys.argv[1:])])
+    try:
+        # Checked up front: inside a build it would fail every session one by one.
+        builder.parse_repo_roots(os.environ.get("AGENTPLAY_REPO_ROOTS", ""))
+    except ValueError as exc:
+        raise SystemExit(f"agentplay: {exc}") from None
     try:
         rv = args.fn(args)
     except KeyboardInterrupt:

@@ -741,3 +741,27 @@ def test_hex_named_files_are_still_file_operations():
     ops = sm.file_ops("Bash", {"command": "rm deadbeef1 && echo x > cafe1234"}, "/repo")
     assert ops.get(os.path.normpath("/repo/deadbeef1")) == "delete"
     assert ops.get(os.path.normpath("/repo/cafe1234")) == "create"
+
+
+def test_configured_repo_roots_claim_paths_in_a_deleted_worktree(tmp_path):
+    base = tmp_path / "x" / "worktrees"
+    resolver = sm.RepoResolver(sm.parse_repo_roots(f"{base}/wb-*=acme/widget"))
+    assert resolver.resolve(str(base / "wb-abc" / "src" / "app.py")) == (str(base / "wb-abc"), "widget", "acme/widget")
+    assert resolver.resolve(str(tmp_path / "x" / "other" / "wb-abc" / "app.py")) is None
+    # `*` stays within one path component.
+    nested = sm.RepoResolver(sm.parse_repo_roots(f"{tmp_path}/*=acme/widget"))
+    assert nested.resolve(str(tmp_path / "x" / "y.py"))[0] == str(tmp_path / "x")
+
+
+def test_repo_roots_env_is_read_when_no_roots_are_given(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTPLAY_REPO_ROOTS", f" {tmp_path}/wb-*=acme/widget , ")
+    assert sm.RepoResolver().resolve(str(tmp_path / "wb-1" / "a.py")) == (str(tmp_path / "wb-1"), "widget", "acme/widget")
+    assert sm.parse_repo_roots("") == ()
+
+
+@pytest.mark.parametrize(
+    "value", ["/x/wb-*", "=acme/widget", "wb-*=acme/widget", "/x/wb-*=widget", "/x/wb-*=a/b/c", "/x/wb-*=/widget"]
+)
+def test_malformed_repo_roots_are_rejected(value):
+    with pytest.raises(ValueError, match="AGENTPLAY_REPO_ROOTS"):
+        sm.parse_repo_roots(value)
