@@ -160,7 +160,7 @@ class _FakeServer:
 def test_view_says_when_the_requested_port_is_busy(monkeypatch, capsys, requested, bound, notice) -> None:
     from agentplay import server
 
-    monkeypatch.setattr(server, "serve", lambda _port: _FakeServer(bound))
+    monkeypatch.setattr(server, "serve", lambda _port, **_kw: _FakeServer(bound))
     assert cli.main(["view", "--port", str(requested), "--no-open", "--no-build"]) == 0
     out, err = capsys.readouterr()
     assert (f"Port {requested} is busy; using {bound} instead." in err) is notice
