@@ -520,13 +520,11 @@ def test_anything_else_from_a_remote_peer_reads_nothing(env, allowed, headers):
             assert "SECRET-PROMPT" not in body
 
 
-def test_an_allowed_host_still_cannot_post_or_see_the_account(env):
+def test_an_allowed_host_cannot_post(env):
     with _remote_server(env, ALLOWED) as (request, _sid):
         headers = {"Host": "allowed.example", "Origin": "http://allowed.example", "Content-Type": "application/json"}
         status, _ = request("/api/account", headers, data=b'{"action": "skip"}')
-        assert status == 403
-        status, body = request("/api/account", {"Host": "allowed.example"})
-        assert status == 200 and json.loads(body) == {"success": True, "status": "none", "email": None, "enabled": False}
+        assert status == 405
     assert not (env["sm"] / "account.json").exists()
 
 

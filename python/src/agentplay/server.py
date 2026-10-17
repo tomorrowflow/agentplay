@@ -7,12 +7,10 @@ Binds to 127.0.0.1 by default. Serves the static viewer from the package's
 ``GET /api/sessions``          paged session rows (``from``, ``to``, ``search``, ``pageSize``, ``cursor``)
 ``GET /api/map``               one entry per ``session_id`` param, each with a ``url``
 ``GET /api/map-doc?id=...``    the map document itself
-``GET /api/account``           whether to offer the email signup card (see ``account.py``)
 ``GET /api/prompt-images?id=...``  per-turn metadata for images pasted into Claude Code prompts (this machine only)
 ``GET /api/prompt-image?id=...&turn=...&i=...``  one such image, read from the transcript on demand (this machine only)
 ``GET /api/hook-detail?id=...&uuid=...``  the message and command of one hook failure, read from the transcript on demand (this machine only)
 ``GET /api/reviews?id=...``    the ``agentplay review`` docs that list this session (this machine only)
-``POST /api/account``          ``{"action": "signup", "email": ...}``, ``{"action": "skip"}``, ``{"action": "disconnect"}``
 
 Every read needs a trusted request (see ``_Handler._trusted``): a loopback peer
 naming this machine in ``Host``, or a ``Host`` the operator listed with
@@ -26,8 +24,8 @@ messages and commands are read the same way; see ``hook_detail.py``. Review docs
 hold PR comment text and are local files written by ``agentplay review``; see
 ``review.py``.
 
-The only write is ``~/.agentplay/account.json``, and the only thing that can leave
-the machine is an email the user typed into the signup card.
+The server writes nothing and sends nothing off the machine. Every ``POST`` is
+answered 405.
 """
 
 from __future__ import annotations
@@ -47,14 +45,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import account, hook_detail, prompt_images, review
+from . import hook_detail, prompt_images, review
 from .store import Store
 
 MAX_PAGE = 200
 DEFAULT_PAGE = 50
-MAX_BODY = 4096
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
-# Extra origins allowed to post (comma-separated), e.g. the viewer's Vite dev
+# Extra origins allowed to read (comma-separated), e.g. the viewer's Vite dev
 # server at http://localhost:5173. Nothing else but this server's own origin.
 DEV_ORIGINS_ENV = "AGENTPLAY_DEV_ORIGINS"
 _FETCH_SITES = {"same-origin", "none"}
@@ -360,12 +357,6 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._hook_detail(q)
             if url.path == "/api/reviews":
                 return self._reviews(q)
-            if url.path == "/api/account":
-                # The email is the user's: only the viewer on this machine sees it,
-                # and only it is ever offered the card, since only it may post.
-                if not self._local_viewer():
-                    return self._json({"success": True, "status": "none", "email": None, "enabled": False})
-                return self._json({"success": True, **account.public_state()})
             if url.path.startswith("/api/"):
                 return self._error(404, "not_found", "Unknown endpoint.")
             return self._static(url.path)
@@ -375,47 +366,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(500, "internal_error", "Something went wrong reading your local sessions.")
 
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
-        url = urlsplit(self.path)
-        if url.path != "/api/account":
-            return self._error(404, "not_found", "Unknown endpoint.")
-        # The only write this server takes. A browser on another site can reach
-        # 127.0.0.1, so: same machine, a local Origin and Host (no DNS rebinding),
-        # and a JSON body, which a cross-site form can't send without a preflight
-        # this server never answers.
-        if not (_is_loopback(self.client_address) and self._allowed_origin(self.headers.get("Origin"))
-                and _hostname(self.headers.get("Host")) in _LOCAL_HOSTS):
-            return self._error(403, "forbidden", "Only the local viewer can do this.")
-        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
-            return self._error(415, "unsupported_media_type", "Send JSON.")
-        try:
-            size = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            size = -1
-        if not 0 < size <= MAX_BODY:
-            return self._error(400, "invalid_input", "Bad request body.")
-        try:
-            body = json.loads(self.rfile.read(size))
-        except ValueError:
-            return self._error(400, "invalid_input", "Bad request body.")
-        action = body.get("action") if isinstance(body, dict) else None
-        try:
-            if action == "skip":
-                return self._json({"success": True, **account.skip()})
-            if action == "disconnect":
-                return self._json({"success": True, **account.disconnect()})
-            if action == "signup":
-                email = str(body.get("email") or "").strip()
-                if not account.valid_email(email):
-                    return self._error(400, "invalid_email", "That doesn't look like an email address.")
-                try:
-                    return self._json({"success": True, **account.sign_up(email)})
-                except (OSError, ValueError):
-                    return self._error(502, "unreachable", "We couldn't reach Entelligence. Check your connection and try again.")
-            return self._error(400, "invalid_input", "Unknown action.")
-        except BrokenPipeError:
-            return None
-        except Exception:  # noqa: BLE001 - never leak a traceback to the page
-            return self._error(500, "internal_error", "Something went wrong saving that.")
+        self._error(405, "method_not_allowed", "This server is read-only.")
 
     def _rows(self) -> list[dict[str, Any]]:
         with self.lock:

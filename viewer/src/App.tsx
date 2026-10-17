@@ -17,7 +17,6 @@ import { fileSource, type OpenResult } from '@/data/fileSource';
 import { httpSource, probeServer } from '@/data/httpSource';
 import type { SessionMapSource } from '@/data/source';
 import { useSessionExplorerStatus } from '@/data/hooks';
-import { AccountChip, useAccount, WelcomeGate } from '@/app/AccountGate';
 import { useTheme } from '@/app/theme';
 import { useFileDrop } from '@/app/useFileDrop';
 
@@ -50,8 +49,6 @@ export function App() {
   const base = useMemo(serverBase, []);
   const probed = useProbedMode(base);
   const server = useMemo(() => httpSource(base), [base]);
-  // Only the CLI's own server knows about the signup; demo and files never ask.
-  const account = useAccount(base, probed === 'server');
   const demo = useMemo(() => demoSource(), []);
   const files = useMemo(() => fileSource(), []);
   // Opened files take over the view; "Back" returns to the base source.
@@ -118,7 +115,6 @@ export function App() {
           picker={picker}
           onBack={openedFiles ? () => setShowFiles(false) : undefined}
           baseLabel={baseSource.label}
-          account={mode === 'server' ? <AccountChip base={base} state={account.data} /> : null}
         />
         {mode === 'demo' && source === demo ? (
           <Banner>
@@ -138,7 +134,6 @@ export function App() {
             emptyAction={picker}
           />
         )}
-        {mode === 'server' && source === server ? <WelcomeGate base={base} state={account.data} /> : null}
       </SessionMapSourceProvider>
       {dragging ? <DropOverlay /> : null}
     </div>
@@ -151,14 +146,12 @@ function AppBar({
   picker,
   onBack,
   baseLabel,
-  account,
 }: {
   mode: Mode;
   source: SessionMapSource;
   picker: ReactNode;
   onBack?: () => void;
   baseLabel: string;
-  account: ReactNode;
 }) {
   const { theme, toggle } = useTheme();
   const status = useSessionExplorerStatus();
@@ -181,7 +174,6 @@ function AppBar({
         </Button>
       ) : null}
       <div className="ml-auto flex items-center gap-2">
-        {account}
         {picker}
         <Button
           variant="ghost"

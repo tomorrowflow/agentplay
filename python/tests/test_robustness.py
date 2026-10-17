@@ -96,9 +96,9 @@ def httpd(tmp_path):
         server.server_close()
 
 
-def _request(server, method: str, headers: dict[str, str]) -> tuple[int, Any]:
+def _request(server, method: str, headers: dict[str, str], path: str = "/api/status") -> tuple[int, Any]:
     conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
-    conn.putrequest(method, "/api/account" if method == "POST" else "/api/status", skip_host=True)
+    conn.putrequest(method, path, skip_host=True)
     for k, v in headers.items():
         conn.putheader(k, v)
     conn.putheader("Content-Length", "2")
@@ -111,18 +111,25 @@ def _request(server, method: str, headers: dict[str, str]) -> tuple[int, Any]:
 
 @pytest.mark.parametrize("host", ["[::1", "[::1:80", "a]b", "localhost:99999", "localhost:abc"])
 def test_malformed_host_is_403_json(httpd, host) -> None:
-    for method in ("GET", "POST"):
-        status, body = _request(httpd, method, {"Host": host})
-        assert status == 403
-        assert body["code"] == "forbidden"
+    status, body = _request(httpd, "GET", {"Host": host})
+    assert status == 403
+    assert body["code"] == "forbidden"
 
 
 @pytest.mark.parametrize("origin", ["http://[::1", "http://a]b", "http://localhost:99999"])
 def test_malformed_origin_is_403_json(httpd, origin) -> None:
-    for method in ("GET", "POST"):
-        status, body = _request(httpd, method, {"Host": "localhost", "Origin": origin})
-        assert status == 403
-        assert body["code"] == "forbidden"
+    status, body = _request(httpd, "GET", {"Host": "localhost", "Origin": origin})
+    assert status == 403
+    assert body["code"] == "forbidden"
+
+
+@pytest.mark.parametrize("path", ["/api/account", "/api/status", "/"])
+def test_every_post_is_405_even_from_the_local_viewer(httpd, path) -> None:
+    port = httpd.server_address[1]
+    headers = {"Host": "localhost", "Origin": f"http://localhost:{port}", "Content-Type": "application/json"}
+    status, body = _request(httpd, "POST", headers, path)
+    assert status == 405
+    assert body["code"] == "method_not_allowed"
 
 
 def test_local_host_with_a_valid_port_still_passes(httpd) -> None:
