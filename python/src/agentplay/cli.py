@@ -415,19 +415,22 @@ def cmd_factory_digest(args: argparse.Namespace) -> int:
         cards = fd.load_cards(args.cards, sys.stdin)
         doc = fd.build_digest(cards, fd.load_sessions(st), now_ms=int(now.timestamp() * 1000),
                               days=args.days, prefixes=args.card or [])
+        out_dir = Path(args.out) if args.out else (None if args.card else st.base / "digests")
+        out = fd.save_digest(out_dir, doc, picked=bool(args.card)) if out_dir else None
     except fd.DigestError as exc:
         print(f"agentplay: {exc}", file=sys.stderr)
         return 1
+    except OSError as exc:
+        print(f"agentplay: can't write the digest: {exc}", file=sys.stderr)
+        return 1
     if args.card:
-        if args.out:
-            out = fd.save_digest(Path(args.out), doc, picked=True)
+        if out:
             print(f"Wrote {out} and {out.with_suffix('.md').name}.", file=sys.stderr)
         if args.json:
             print(json.dumps(doc, indent=2, ensure_ascii=False))
         else:
             print(fd.render_markdown(doc), end="")
         return 0
-    out = fd.save_digest(Path(args.out) if args.out else st.base / "digests", doc)
     if args.json:
         print(json.dumps(doc, indent=2, ensure_ascii=False))
         return 0

@@ -476,6 +476,18 @@ def test_cli_reports_a_malformed_cards_file(env, capsys):
     assert not (env["sm"] / "digests").exists()
 
 
+@pytest.mark.parametrize("picked", [[], ["--card", CARD_A[:8]]])
+def test_cli_reports_an_unwritable_out_folder(env, capsys, picked):
+    cards = env["tmp"] / "cards.json"
+    cards.write_text(json.dumps({"cards": [_card(CARD_A, "A", [], published=_at(11, 0))]}))
+    blocker = env["tmp"] / "a-file"
+    blocker.write_text("")
+    argv = ["factory-digest", "--cards", str(cards), "--now", _iso(NOW), "--out", str(blocker / "digests"), *picked]
+    assert cli.main(argv) == 1
+    captured = capsys.readouterr()
+    assert captured.err.startswith("agentplay: can't write the digest:") and captured.out == ""
+
+
 def test_the_factory_model_is_priced(env):
     st = env["build"]({_stem(1): (_wb(CARD_A), [(_at(10, 1), "edit", 1_000_000)])})
     doc = _digest(st, [_card(CARD_A, "priced", [], published=_at(11, 0))])
