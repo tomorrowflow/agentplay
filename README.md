@@ -20,6 +20,7 @@ That one command finds the agent sessions already on your machine, builds a reda
 - [Install](#install)
 - [Using the viewer](#using-the-viewer)
 - [Review loop](#review-loop)
+- [Run as a service (Docker)](#run-as-a-service-docker)
 - [Supported agents](#supported-agents)
 - [Privacy](#privacy)
 - [Command reference](#command-reference)
@@ -136,6 +137,18 @@ agentplay view                                    # the Review tab now shows the
 
 Only Claude Code sessions record edit evidence so far. Maps built before this release have none; rebuild them with `agentplay build --rebuild`.
 
+## Run as a service (Docker)
+
+On a Linux host you can keep the viewer running in a container and open it from your other machines over Tailscale. The container reads Claude Code's home read-only, writes maps to your usual `~/.agentplay`, and scans for new sessions every ten minutes.
+
+```bash
+cp .env.example .env        # set AGENTPLAY_PUBLIC_HOST, UID and GID
+docker compose up -d
+tailscale serve --bg --https=8443 http://127.0.0.1:7317
+```
+
+Then open `https://<AGENTPLAY_PUBLIC_HOST>:8443/`. The port is published on `127.0.0.1` only. The server trusts a request only when its `Host` is the name in `AGENTPLAY_PUBLIC_HOST` (any port), and refuses every other read; that is what `--allow-host` does. Through Docker even `http://127.0.0.1:7317` on the host is another peer, so open the tailnet name there too. The email signup stays off.
+
 ## Supported agents
 
 | Agent | Reads from (defaults) | Subagent lanes | Tokens | Notes |
@@ -156,7 +169,7 @@ Run `agentplay agents` to see which of these were found on your machine. Every l
 
 agentplay was designed so that you can show a map to someone else without worrying about what is in it.
 
-**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` and loads no remote fonts or scripts. It shows a few links to Entelligence (a banner, the welcome card, sample-review and "fix now" blocks); they open only when you click them, carry only a tag naming where you clicked (`?src=agentplay-viewer&from=banner`) and nothing from your sessions, and the viewer fetches nothing from them on its own. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
+**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` unless you pass `--host`, and loads no remote fonts or scripts. It shows a few links to Entelligence (a banner, the welcome card, sample-review and "fix now" blocks); they open only when you click them, carry only a tag naming where you clicked (`?src=agentplay-viewer&from=banner`) and nothing from your sessions, and the viewer fetches nothing from them on its own. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
 
 **The one network call agentplay makes on its own is your email, if you give it.** The first time the viewer opens, it offers to take your email so Entelligence can tell you about new features. If you type one in, agentplay sends Entelligence the event (signup, or later disconnect), that email, a random install id (generated once and kept in `~/.agentplay/account.json`, so it ties your signup and disconnect to the same install), its version number and the time, and nothing else: no session data, paths or repo names. "Continue without email" sends nothing. All of it is in one file, [`account.py`](python/src/agentplay/account.py); `grep -rn urllib.request python/src/` finds it and nothing else. You can disconnect from the top bar, which forgets the email locally and sends Entelligence one request to delete it; it is sent once and not retried, so if Entelligence can't be reached at that moment it may not arrive, and the email may stay on the list. `DO_NOT_TRACK=1` or `AGENTPLAY_NO_NETWORK=1` turns the offer off and blocks the request. Details: [docs/signup-endpoint.md](docs/signup-endpoint.md).
 
@@ -186,6 +199,8 @@ Repo names and remotes are kept in every path mode, so a reader can tell which p
 
 **Edit evidence and review docs stay local.** For each Claude Code session, `agentplay build` also writes `~/.agentplay/evidence/<map>.json`: SHA-256 hashes of the lines each edit changed, with the edit's step number and repo-relative path. A hash of a short line can be guessed back by hashing candidates, so this file is never part of a map and `export` never includes it; it is written and deleted together with its map. `agentplay review` writes `~/.agentplay/reviews/<owner>_<repo>_<n>.json`, which holds the review comments' text and authors as GitHub or your input file gave them. The local server shows it only to a viewer on this machine, and it is never written into a map or an export.
 
+**`--allow-host` shares your sessions.** The API has no login. With `--allow-host NAME`, anyone who can reach the port and sends `Host: NAME` reads everything the local viewer can: session titles, prompt text in task labels, pasted images, hook output and review comments. What this section says goes only to a viewer on this machine goes to them too. Keep the port on loopback and reach it through Tailscale Serve, which only your tailnet can use. Never expose it with Tailscale Funnel or a public port.
+
 **Sharing.** `agentplay export <session>` writes a single map file and tells you which repo names and how many paths it contains. For anything you post publicly, rebuild with `--path-mode dirs_only`.
 
 The full contract, and the tests that enforce it, are described in [docs/format.md](docs/format.md#redaction-contract).
@@ -211,6 +226,9 @@ agentplay agents      show which agents were found on this machine
 | `--limit N` | build, view, list | newest N sessions |
 | `--no-titles` | build, view | don't keep local titles, and clear any already stored |
 | `--port 7317`, `--no-open`, `--no-build` | view | server options |
+| `--host 0.0.0.0` | view | listen on another interface; fails instead of moving when the port is busy |
+| `--allow-host NAME` | view | trust requests with this `Host` from any peer (repeatable); see [Privacy](#privacy) |
+| `--rescan 600` | view | scan for new sessions again every N seconds (default `0`: once at start) |
 | `--json` | build, list, review | machine-readable output |
 | `--pr acme/api#142` | review | the pull request |
 | `--session <id>` | review | a session to attribute to (repeatable; default: sessions whose map lists the PR) |
