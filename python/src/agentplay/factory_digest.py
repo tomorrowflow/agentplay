@@ -46,13 +46,7 @@ FLAGS: tuple[Flag, ...] = (
 )
 _ATTEMPT_STATUSES = ("running", "succeeded", "failed", "blocked", "stopped")
 _MS = (int, float)  # Workboard timestamps are epoch milliseconds
-
-# (card attempt status, transcript outcome) pairs that contradict each other.
-_MISMATCH: frozenset[tuple[str, str]] = frozenset({
-    ("stopped", "blocked"),
-    ("succeeded", "blocked"),
-    ("succeeded", "interrupted"),
-})
+_DENIALS = ("permission_denied", "blocked")
 
 
 class DigestError(Exception):
@@ -258,6 +252,7 @@ class AttemptDigest(TypedDict):
     error: str | None
     contextTokens: int | None
     transcriptOutcome: str
+    stoppedOnDenial: bool
     fidelity: Fidelity
     metrics: Metrics | None
 
@@ -364,15 +359,26 @@ def split_attempts(events: list[Timed], attempts: tuple[Attempt, ...]) -> tuple[
     return slices, rest
 
 
-def fidelity(status: str, outcome: str, has_events: bool) -> Fidelity:
+def stopped_on_denial(events: list[dict[str, Any]]) -> bool:
+    """Whether the last call was refused; a denial the agent worked past is not a stop."""
+    last = next((e for e in reversed(events) if e["kind"] not in _NON_CALL_KINDS), None)
+    return bool(last and last.get("err") and last.get("errClass") in _DENIALS)
+
+
+def fidelity(status: str, outcome: str, denied_last: bool, has_events: bool) -> Fidelity:
+    """``mismatch`` when the card's status contradicts how the attempt's events end."""
     if not has_events:
         return "no_events"
-    return "mismatch" if (status, outcome) in _MISMATCH else "ok"
+    contradicts = (status in ("stopped", "succeeded") and denied_last) or (
+        status == "succeeded" and outcome == "interrupted"
+    )
+    return "mismatch" if contradicts else "ok"
 
 
 def _attempt_digest(a: Attempt, slice_: list[Timed]) -> AttemptDigest:
     evs = [t.event for t in slice_]
     outcome = classify_outcome(evs, "")
+    denied_last = stopped_on_denial(evs)
     return {
         "id": a.id,
         "status": a.status,
@@ -381,7 +387,8 @@ def _attempt_digest(a: Attempt, slice_: list[Timed]) -> AttemptDigest:
         "error": a.error,
         "contextTokens": a.context_tokens,
         "transcriptOutcome": outcome,
-        "fidelity": fidelity(a.status, outcome, bool(evs)),
+        "stoppedOnDenial": denied_last,
+        "fidelity": fidelity(a.status, outcome, denied_last, bool(evs)),
         "metrics": metrics(evs) if evs else None,
     }
 
@@ -392,7 +399,7 @@ def card_flags(totals: Metrics | None, attempts: list[AttemptDigest]) -> list[Fl
     raised: dict[Flag, bool] = {
         "no-verify-after-edit": totals["verify"]["afterLastEdit"] is False,
         "verify-failed-last": totals["verify"]["lastVerifyFailed"] is True,
-        "stopped-on-permission": any(a["transcriptOutcome"] == "blocked" for a in attempts),
+        "stopped-on-permission": any(a["stoppedOnDenial"] for a in attempts),
         "attempt-fidelity-mismatch": any(a["fidelity"] == "mismatch" for a in attempts),
         "no-transcript": False,
     }

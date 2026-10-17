@@ -315,7 +315,7 @@ The reference tool keeps three more kinds of document next to the maps. None is 
       },
       "attempts": [
         { "id": "a1", "status": "succeeded", "startedAt": "2026-10-15T10:00:00Z", "endedAt": "2026-10-15T10:20:00Z",
-          "error": null, "contextTokens": 98000, "transcriptOutcome": "verified", "fidelity": "ok", "metrics": { /* as totals */ } }
+          "error": null, "contextTokens": 98000, "transcriptOutcome": "verified", "stoppedOnDenial": false, "fidelity": "ok", "metrics": { /* as totals */ } }
       ],
       "unattributed": null,
       "flags": [] }
@@ -326,8 +326,8 @@ The reference tool keeps three more kinds of document next to the maps. None is 
 
 - **Selection.** A card is published at its handoff's `publishedAt` when the handoff phase is `published`, otherwise at its rework's `acceptedAt`. The digest lists the cards published in the window, or the cards named with `--card`, whenever they were published.
 - **`totals`** covers every event of the card's sessions, in wall-clock order; it is null when no session was found. **`metrics`** and **`unattributed`** use the same shape. `peakContext` is the largest main-agent request (fresh input plus cache write plus cache read), as `totals.maxContext` in a map. `verify.afterLastEdit` is null when there is no edit, and `verbsAfterLastEdit` names the shell verbs of the `verify` events after it.
-- **`attempts`** are the card's own attempts. Each event goes to the latest-started attempt whose start and end (open while running) hold it, with one second of slack because the card stores whole seconds; events outside every attempt are `unattributed`. A session resumed for rework so yields two attempts. `status`, `error` and `contextTokens` are the card's; `transcriptOutcome` is the [outcome](#outcomes) of the attempt's events alone.
-- **`fidelity`** is `mismatch` when the card and the transcript disagree: an attempt the card calls `stopped` or `succeeded` whose events end `blocked`, or a `succeeded` one whose events end `interrupted`. It is `no_events` when no event falls in the attempt.
-- **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (an attempt whose transcript ends blocked: a permission denial or block among its last events), `attempt-fidelity-mismatch` and `no-transcript`.
+- **`attempts`** are the card's own attempts. Each event goes to the latest-started attempt whose start and end (open while running) hold it, with one second of slack because the card stores whole seconds; events outside every attempt are `unattributed`. A session resumed for rework so yields two attempts. `status`, `error` and `contextTokens` are the card's; `transcriptOutcome` is the [outcome](#outcomes) of the attempt's events alone, so it reads `blocked` when a denial is among the last events even if the agent worked past it. `stoppedOnDenial` is true when the attempt's last call (any event but a request, user turn, compaction, error, delay, model switch or VCS record) failed as `permission_denied` or `blocked`.
+- **`fidelity`** is `mismatch` when the card and the transcript disagree: an attempt the card calls `stopped` or `succeeded` that has `stoppedOnDenial`, or a `succeeded` one whose `transcriptOutcome` is `interrupted`. It is `no_events` when no event falls in the attempt.
+- **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (some attempt has `stoppedOnDenial`; a denial the agent recovered from only counts in `stops`), `attempt-fidelity-mismatch` and `no-transcript`.
 - **`unmatchedSessions`** are factory sessions whose card is not in the input.
 - `title` and `labels` are the card's own text. They live only in these files.

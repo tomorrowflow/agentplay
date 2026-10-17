@@ -240,36 +240,43 @@ def test_a_stopped_attempt_that_ends_on_permission_denials_is_a_mismatch(env):
     ])
     stopped, failed = (_by_id(doc)[c] for c in (CARD_A, CARD_B))
     attempt = stopped["attempts"][0]
-    assert (attempt["transcriptOutcome"], attempt["fidelity"]) == ("blocked", "mismatch")
+    assert (attempt["transcriptOutcome"], attempt["stoppedOnDenial"], attempt["fidelity"]) == (
+        "blocked", True, "mismatch")
     assert attempt["metrics"]["stops"] == {"permissionDenied": 2, "blocked": 0}
     assert stopped["flags"] == ["no-verify-after-edit", "stopped-on-permission", "attempt-fidelity-mismatch"]
-    assert failed["attempts"][0]["fidelity"] == "ok"
-    assert "attempt-fidelity-mismatch" not in failed["flags"]
+    assert (failed["attempts"][0]["stoppedOnDenial"], failed["attempts"][0]["fidelity"]) == (True, "ok")
+    assert failed["flags"] == ["no-verify-after-edit", "stopped-on-permission"]
 
 
 def test_stopped_on_permission_means_an_attempt_ended_on_a_denial(env):
-    # classify_outcome reads the last 12 events, so the recovery has to outlast them
-    recovered: list[Step] = [(_at(10, 1), "deny", 1), *((_at(10, 2, s), "edit", 1) for s in range(0, 40, 5)),
-                             (_at(10, 3), "pytest", 1)]
+    recovered: list[Step] = [(_at(10, 1), "deny", 1), (_at(10, 2), "edit", 1), (_at(10, 3), "pytest", 1)]
     retried: list[Step] = [(_at(10, 1), "deny", 1), (_at(10, 31), "edit", 1), (_at(10, 32), "pytest", 1)]
     st = env["build"]({_stem(1): (_wb(CARD_A), recovered), _stem(2): (_wb(CARD_B), retried)})
-    attempts = [_attempt("one", "failed", _at(10, 0), _at(10, 10)),
-                _attempt("two", "succeeded", _at(10, 30), _at(10, 40))]
-    doc = _digest(st, [_card(CARD_A, "recovered", attempts, published=_at(11, 0)),
-                       _card(CARD_B, "stopped then retried", attempts, published=_at(11, 0))])
-    assert _by_id(doc)[CARD_A]["attempts"][0]["metrics"]["stops"]["permissionDenied"] == 1
-    assert "stopped-on-permission" not in _by_id(doc)[CARD_A]["flags"]
-    assert "stopped-on-permission" in _by_id(doc)[CARD_B]["flags"]
+    doc = _digest(st, [
+        _card(CARD_A, "recovered", [_attempt("only", "succeeded", _at(10, 0), _at(10, 10))], published=_at(11, 0)),
+        _card(CARD_B, "stopped then retried", [_attempt("one", "failed", _at(10, 0), _at(10, 10)),
+                                               _attempt("two", "succeeded", _at(10, 30), _at(10, 40))],
+              published=_at(11, 0)),
+    ])
+    recovered_card, retried_card = (_by_id(doc)[c] for c in (CARD_A, CARD_B))
+    [only] = recovered_card["attempts"]
+    assert only["metrics"]["stops"]["permissionDenied"] == 1
+    assert (only["stoppedOnDenial"], only["fidelity"]) == (False, "ok")
+    assert recovered_card["flags"] == []
+    assert [a["stoppedOnDenial"] for a in retried_card["attempts"]] == [True, False]
+    assert retried_card["flags"] == ["stopped-on-permission"]
 
 
 @pytest.mark.parametrize(
-    ("status", "outcome", "expected"),
-    [("stopped", "blocked", "mismatch"), ("succeeded", "blocked", "mismatch"),
-     ("succeeded", "interrupted", "mismatch"), ("succeeded", "verified", "ok"), ("failed", "blocked", "ok")],
+    ("status", "outcome", "denied_last", "expected"),
+    [("stopped", "blocked", True, "mismatch"), ("succeeded", "blocked", True, "mismatch"),
+     ("succeeded", "interrupted", False, "mismatch"), ("succeeded", "verified", False, "ok"),
+     ("succeeded", "blocked", False, "ok"), ("stopped", "blocked", False, "ok"),
+     ("failed", "blocked", True, "ok")],
 )
-def test_fidelity_table(status, outcome, expected):
-    assert fd.fidelity(status, outcome, True) == expected
-    assert fd.fidelity(status, outcome, False) == "no_events"
+def test_fidelity_table(status, outcome, denied_last, expected):
+    assert fd.fidelity(status, outcome, denied_last, True) == expected
+    assert fd.fidelity(status, outcome, denied_last, False) == "no_events"
 
 
 # ---------------------------------------------------------------- selection
@@ -368,13 +375,14 @@ DIGEST_SCHEMA = {
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["id", "status", "startedAt", "endedAt", "error", "contextTokens",
-                                 "transcriptOutcome", "fidelity", "metrics"],
+                                 "transcriptOutcome", "stoppedOnDenial", "fidelity", "metrics"],
                     "properties": {
                         "id": {"type": "string"},
                         "status": {"enum": ["running", "succeeded", "failed", "blocked", "stopped"]},
                         "startedAt": {"type": "string"}, "endedAt": _STR_OR_NULL, "error": _STR_OR_NULL,
                         "contextTokens": {"type": ["integer", "null"]},
                         "transcriptOutcome": {"type": "string"},
+                        "stoppedOnDenial": {"type": "boolean"},
                         "fidelity": {"enum": ["ok", "mismatch", "no_events"]},
                         "metrics": _METRICS,
                     },
