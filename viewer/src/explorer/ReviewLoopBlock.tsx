@@ -1,16 +1,5 @@
-import { ArrowRight } from '@phosphor-icons/react';
-import { parseAsString, useQueryState } from 'nuqs';
-import { Badge } from '@/components/ui/badge';
-import { buttonVariants } from '@/components/ui/button';
-import { LockedBlock } from '@/components/LockedBlock';
-import { FixNowDialog } from './FixNowDialog';
-import { SAMPLE_SESSION_ID, useSampleMode } from '@/app/sampleMode';
-import { reviewLoopCopy, type LinkSource } from '@/core/entelligence';
-import {
-  SAMPLE_COMMENTS,
-  type SampleComment as SampleCommentData,
-} from './reviewSample';
 import type { ReactNode } from 'react';
+import { Badge } from '@/components/ui/badge';
 import type { ReviewDoc, SessionMap } from '@/core/schema';
 import {
   realCommentCard,
@@ -22,34 +11,28 @@ import { useSessionReviews } from '@/data/hooks';
 import { cn } from '@/lib/utils';
 
 /**
- * The review loop, in the outcomes panel: a review comment on a PR, the edit
- * that caused it, and the rule the repeats cluster into.
- *
- * When `agentplay review` has traced this session's PR comments on this
- * machine, they show here, unlocked. Otherwise the block gates a capability
- * the map alone cannot have: review comment text needs the host's API, and
- * attributing one to an edit needs the comment plus the session's local edit
- * evidence. The cluster needs every other session too, which stays locked.
+ * The review loop, in the outcomes panel: the review comments `agentplay
+ * review` traced on this machine, each with the edit that caused it. A
+ * session with no review docs renders `empty`, which defaults to nothing.
  */
 export function ReviewLoopBlock({
   map,
-  src = 'outcomes',
   path = null,
   onPath,
   onSeek,
+  empty = null,
 }: {
   map: SessionMap;
-  src?: LinkSource;
   /** the picked comment's causal path, lit on the map */
   path?: readonly number[] | null;
   onPath?: (seqs: readonly number[] | null) => void;
   /** move the playhead to the flagged edit when a comment is picked */
   onSeek?: (index: number) => void;
+  empty?: ReactNode;
 }) {
-  const copy = reviewLoopCopy(map.prs);
-  const [sample, setSample] = useQueryState('sample', parseAsString);
-  const mode = useSampleMode();
   const view = reviewLoopView(useSessionReviews(map.session.id));
+  if (view.kind === 'pending') return null;
+  if (view.kind === 'none') return empty;
   // `srcSeqOf`, not `e.seq`: under a task or model scope the map is a
   // renumbered copy, so the cited number read against `seq` parks the
   // playhead on an unrelated event.
@@ -59,49 +42,13 @@ export function ReviewLoopBlock({
         if (i >= 0) onSeek(i);
       }
     : undefined;
-  if (view.kind === 'pending') return null;
-  if (view.kind === 'real') {
-    return (
-      <ReviewLoopReal
-        map={map}
-        reviews={view.reviews}
-        path={path}
-        onPath={onPath}
-        onSeek={seekSeq}
-      />
-    );
-  }
-  // Revealed only on the session the comments are about. `sample` survives
-  // picking another session out of the sidebar, and the steps they cite
-  // exist in that map too -- they would light the wrong nodes in it.
-  const shown = sample !== null && map.session.id === SAMPLE_SESSION_ID;
   return (
-    <LockedBlock
-      title={copy.title}
-      blurb={copy.blurb}
-      ctaLabel="Connect your PRs"
-      src={src}
-      preview={
-        <ReviewLoopSample path={path} onPath={onPath} onSeek={seekSeq} />
-      }
-      shown={shown}
-      // Showing the sample swaps the whole view onto the bundled session
-      // that opened a PR, so the map, the timeline and the panels are all
-      // the same session the comment below belongs to. Hiding it only
-      // re-blurs: leaving the sample is a separate, named action, because
-      // doing it silently would throw away a session the user had open.
-      onToggle={() => (shown ? void setSample(null) : mode.show())}
-      exit={
-        mode.active && mode.canExit ? (
-          <button
-            type="button"
-            onClick={mode.exit}
-            className={cn(buttonVariants({ variant: 'link', size: 'sm' }))}
-          >
-            Back to your sessions
-          </button>
-        ) : null
-      }
+    <ReviewLoopReal
+      map={map}
+      reviews={view.reviews}
+      path={path}
+      onPath={onPath}
+      onSeek={seekSeq}
     />
   );
 }
@@ -127,8 +74,8 @@ function pickHandler(
 
 /**
  * Real comments, from the review docs `agentplay review` wrote on this
- * machine. No rule or "Fix now": clustering comments into rules needs every
- * session, which a local review does not have.
+ * machine. No rule: clustering comments into rules needs every session, which
+ * a local review does not have.
  */
 function ReviewLoopReal({
   map,
@@ -197,97 +144,11 @@ function ReviewLoopReal({
 }
 
 /**
- * Invented, and labelled as such by `LockedBlock` -- but every step number,
- * file and task below is a real one from the demo session the "See sample"
- * button switches to, so a reader can scrub the timeline and find each one.
- * Shaped like the real panel: comment, cause, causal path, cluster.
- */
-function ReviewLoopSample({
-  path,
-  onPath,
-  onSeek,
-}: {
-  path?: readonly number[] | null;
-  onPath?: (seqs: readonly number[] | null) => void;
-  onSeek?: (seq: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <p className="ds-text-body-xs-semibold text-ds-text-subtle">
-        {SAMPLE_COMMENTS.length} review comments on acme/api #142
-        {onPath ? ' \u00b7 pick one to light its path on the map' : null}
-      </p>
-      {SAMPLE_COMMENTS.map((c) => (
-        <ReviewCommentCard
-          key={c.editSeq}
-          file={c.file}
-          line={c.line}
-          author={c.author}
-          text={c.text}
-          steps={c.path}
-          picked={samePath(path, c.path)}
-          onPick={pickHandler(c.path, c.editSeq, path, onPath, onSeek)}
-          after={<SampleTail c={c} />}
-          footer={<FixNowDialog c={c} />}
-        >
-          <SampleCause c={c} />
-        </ReviewCommentCard>
-      ))}
-    </div>
-  );
-}
-
-/** What the detector flagged, the edit, the task and the cause: sample-only detail. */
-function SampleCause({ c }: { c: SampleCommentData }) {
-  return (
-    <>
-      <div className="flex flex-wrap items-center gap-1.5">
-        <Badge variant="error">{c.flagged}</Badge>
-        <span className="font-mono ds-text-body-xs-medium text-ds-text-subtle">
-          edit #{c.editSeq}
-        </span>
-      </div>
-      <p className="ds-text-body-xs-medium text-ds-text-subtle">
-        Task: {c.task}
-      </p>
-      <div className="flex flex-col gap-0.5">
-        <span className="ds-text-body-xs-semibold text-ds-text-subtle">
-          Cause · {c.cause}
-        </span>
-        <span className="ds-text-body-xs-medium text-ds-text-default">
-          {c.why}
-        </span>
-      </div>
-    </>
-  );
-}
-
-/** The never-opened file and the cluster the sample comment lands in. */
-function SampleTail({ c }: { c: SampleCommentData }) {
-  return (
-    <>
-      {c.ghost ? (
-        <p className="ds-text-body-xs-medium text-ds-text-subtle">
-          Ghost: {c.ghost}
-        </p>
-      ) : null}
-      <div className="flex items-center gap-1 ds-text-body-xs-medium text-ds-brand-default">
-        <span>
-          Clustered into {c.learning} with {c.alsoIn}{' '}
-          {c.alsoIn === 1 ? 'other session' : 'other sessions'}
-        </span>
-        <ArrowRight size={12} aria-hidden className="shrink-0" />
-      </div>
-    </>
-  );
-}
-
-/**
- * One comment, real or sample. Picking it lights its causal path on the map
+ * One comment. Picking it lights its causal path on the map
  * and dims the rest -- the same focus mechanism the dock's category chips
  * use, so the path is drawn by the map rather than painted over it. Picking
  * it again clears the focus. `children` sits between the comment and its
- * path, `after` below the path, `footer` in its own row.
+ * path.
  */
 function ReviewCommentCard({
   file,
@@ -298,8 +159,6 @@ function ReviewCommentCard({
   picked,
   onPick,
   children,
-  after,
-  footer,
 }: {
   file: string;
   line: string;
@@ -309,8 +168,6 @@ function ReviewCommentCard({
   picked: boolean;
   onPick?: () => void;
   children?: ReactNode;
-  after?: ReactNode;
-  footer?: ReactNode;
 }) {
   const body = (
     <>
@@ -346,12 +203,8 @@ function ReviewCommentCard({
           ))}
         </div>
       ) : null}
-      {after}
     </>
   );
-  // The card is a div, not a button: "Fix now" lives inside it, and a
-  // button inside a button is invalid and unreachable by keyboard. The
-  // comment itself is the pick target; the footer is its own row.
   return (
     <div
       className={cn(
@@ -374,11 +227,6 @@ function ReviewCommentCard({
       ) : (
         <div className="flex flex-col gap-1.5">{body}</div>
       )}
-      {footer ? (
-        <div className="flex items-center gap-2 border-t border-ds-border-subtlest pt-1.5">
-          {footer}
-        </div>
-      ) : null}
     </div>
   );
 }

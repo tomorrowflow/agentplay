@@ -410,32 +410,6 @@ const config: Config = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
-      keyframes: {
-        // The Review tab: the one control here that is an offer rather than
-        // a view of the session, so it breathes instead of sitting still.
-        // Slow and small on purpose -- it shares a 300px column with a map
-        // and a timeline, and anything faster reads as an alert.
-        // Both ends are lit: it travels between a visible glow and a
-        // brighter one, never through transparent. A pulse that fades out
-        // spends half its cycle looking like a control nobody styled.
-        'pulse-glow': {
-          '0%, 100%': {
-            boxShadow:
-              '0 0 0 1px var(--primitive-brand-green-500), 0 1px 6px -1px var(--primitive-brand-green-500)',
-            transform: 'translateY(0)',
-          },
-          '50%': {
-            boxShadow:
-              '0 0 0 1.5px var(--primitive-brand-green-400), 0 5px 18px -3px var(--primitive-brand-green-400)',
-            transform: 'translateY(-1.5px)',
-          },
-        },
-      },
-      animation: {
-        // A literal curve, not a var(): an unresolved var() invalidates the
-        // whole shorthand, which silently leaves `animation: none`.
-        'pulse-glow': 'pulse-glow 2.8s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-      },
     },
   },
   plugins: [
