@@ -28,6 +28,7 @@ const UNKNOWN_LABEL: Record<Extract<ReviewAttribution, { kind: 'unknown' }>['rea
   ambiguous: 'Several sessions made this same edit',
   unplaced: 'A recorded edit here could not be replayed',
   line_out_of_range: 'Line is not in the PR head',
+  line_split_differs: 'Line holds a break Git does not count',
   file_not_in_head: 'File is not in the PR head',
   no_evidence: 'No edit evidence for this file',
 };

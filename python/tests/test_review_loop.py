@@ -354,3 +354,12 @@ def test_a_line_from_an_edit_the_replay_could_not_place_is_unplaced():
     edits = [_edit("s1", 7, ["ret"], ["ret", "NEW"])]
     assert _attr(base, head, edits, 3) == {"kind": "unknown", "reason": "unplaced"}
     assert _attr(base, head + "HUMAN\n", edits, 6) == {"kind": "unknown", "reason": "not_observed"}
+
+
+def test_comment_lines_count_newlines_only_like_git():
+    base, head = "a\nTAIL\n", "a\nx\x0cy\nNEW\nTAIL\n"
+    edits = [_edit("s1", 7, ["a"], ["a", "x\x0cy", "NEW"])]
+    assert _attr(base, head, edits, 3) == _owned("s1", 7)
+    assert _attr(base, head, edits, 4) == {"kind": "unknown", "reason": "base"}
+    assert _attr(base, head, edits, 2) == {"kind": "unknown", "reason": "line_split_differs"}
+    assert _attr(base, head, edits, 5) == {"kind": "unknown", "reason": "line_out_of_range"}

@@ -33,7 +33,14 @@ CAUSAL_STEPS = 5
 _TOUCH_KINDS = ("read", "search", "edit")
 
 UnknownReason = Literal[
-    "base", "not_observed", "ambiguous", "unplaced", "line_out_of_range", "file_not_in_head", "no_evidence"
+    "base",
+    "not_observed",
+    "ambiguous",
+    "unplaced",
+    "line_out_of_range",
+    "line_split_differs",
+    "file_not_in_head",
+    "no_evidence",
 ]
 
 
@@ -236,16 +243,35 @@ def _unknown(reason: UnknownReason) -> dict[str, Any]:
     return {"kind": "unknown", "reason": reason}
 
 
+def _replay_index(head: str, line: int) -> int | UnknownReason:
+    """The replay's index for a 1-based PR head line, or why it has none.
+
+    Git and GitHub end lines at ``\\n`` alone; the replay splits with
+    ``str.splitlines``, which also breaks at form feeds, ``\\x1c``-``\\x1e``,
+    ``\\x85`` and U+2028/9. A git line holding one of those is several replay
+    lines, and which of them the comment means is not known.
+    """
+    git_lines = head.split("\n")
+    if head.endswith("\n"):
+        git_lines.pop()
+    if not 1 <= line <= len(git_lines):
+        return "line_out_of_range"
+    index = len("".join(f"{x}\n" for x in git_lines[: line - 1]).splitlines())
+    if head.splitlines()[index : index + 1] != [git_lines[line - 1].removesuffix("\r")]:
+        return "line_split_differs"
+    return index
+
+
 def _attribute(
     comment: dict[str, Any], checkout: Checkout, pull: dict[str, str], edits: list[dict[str, Any]]
 ) -> dict[str, Any]:
     head = checkout.show(pull["head"], comment["path"])
     if head is None:
         return _unknown("file_not_in_head")
+    index = _replay_index(head, comment["line"])
+    if isinstance(index, str):
+        return _unknown(index)
     final = line_fingerprints(head)
-    index = comment["line"] - 1
-    if not 0 <= index < len(final):
-        return _unknown("line_out_of_range")
     if not edits:
         return _unknown("no_evidence")
     base = checkout.show(pull["base"], comment["path"])

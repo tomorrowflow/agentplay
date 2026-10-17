@@ -203,6 +203,7 @@ export const UNKNOWN_ATTRIBUTION_REASONS = [
   'ambiguous',
   'unplaced',
   'line_out_of_range',
+  'line_split_differs',
   'file_not_in_head',
   'no_evidence',
 ] as const;
