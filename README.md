@@ -6,7 +6,7 @@
 uvx agentplay
 ```
 
-That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. The only network call agentplay makes on its own is an optional email signup in the viewer, described under [Privacy](#privacy); set `AGENTPLAY_NO_NETWORK=1` to switch it off. `agentplay review`, which you run yourself, can also read your PR's review comments from GitHub.
+That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. agentplay makes no network call on its own; `agentplay review`, which you run yourself, can read your PR's review comments from GitHub (see [Privacy](#privacy)).
 
 ![The session explorer replaying a Claude Code session: a radial map of every file, tool, MCP server, subagent and model the session touched, the replay timeline underneath, and details on the right](docs/images/explorer-light.png)
 
@@ -127,7 +127,7 @@ Every view is a URL, so a link to a moment in a session reopens it for anyone wh
 ```bash
 agentplay build                                   # records edit evidence for Claude Code sessions
 agentplay review --pr acme/api#142 --repo-path ~/src/api
-agentplay view                                    # the Review tab now shows the comments, unlocked
+agentplay view                                    # the Review tab now shows the comments
 ```
 
 - **Which sessions.** By default, the sessions whose map lists the PR as one they opened. Pass `--session <id>` (repeatable) to name them, for example every session that worked on a ticket over several rework rounds.
@@ -169,11 +169,9 @@ Run `agentplay agents` to see which of these were found on your machine. Every l
 
 agentplay was designed so that you can show a map to someone else without worrying about what is in it.
 
-**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` unless you pass `--host`, and loads no remote fonts or scripts. It shows a few links to Entelligence (a banner, the welcome card, sample-review and "fix now" blocks); they open only when you click them, carry only a tag naming where you clicked (`?src=agentplay-viewer&from=banner`) and nothing from your sessions, and the viewer fetches nothing from them on its own. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
+**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` unless you pass `--host`, and loads no remote fonts or scripts. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
 
-**The one network call agentplay makes on its own is your email, if you give it.** The first time the viewer opens, it offers to take your email so Entelligence can tell you about new features. If you type one in, agentplay sends Entelligence the event (signup, or later disconnect), that email, a random install id (generated once and kept in `~/.agentplay/account.json`, so it ties your signup and disconnect to the same install), its version number and the time, and nothing else: no session data, paths or repo names. "Continue without email" sends nothing. All of it is in one file, [`account.py`](python/src/agentplay/account.py); `grep -rn urllib.request python/src/` finds it and nothing else. You can disconnect from the top bar, which forgets the email locally and sends Entelligence one request to delete it; it is sent once and not retried, so if Entelligence can't be reached at that moment it may not arrive, and the email may stay on the list. `DO_NOT_TRACK=1` or `AGENTPLAY_NO_NETWORK=1` turns the offer off and blocks the request. Details: [docs/signup-endpoint.md](docs/signup-endpoint.md).
-
-**`agentplay review` reads from GitHub when you run it.** It is the second network path, and it is never taken implicitly: only the `review` command, run by you, uses it. Without `--comments` it runs your installed `gh` CLI to read the PR's base and head commits and its inline review comments, and if your checkout lacks the PR head it runs `git fetch origin pull/<n>/head` once. Both use your own credentials and send nothing from your sessions. With `--comments` and `--base`/`--head`, and a checkout that already has both commits, it makes no network call at all.
+**`agentplay review` reads from GitHub when you run it.** It is the only network path, and it is never taken implicitly: only the `review` command, run by you, uses it. Without `--comments` it runs your installed `gh` CLI to read the PR's base and head commits and its inline review comments, and if your checkout lacks the PR head it runs `git fetch origin pull/<n>/head` once. Both use your own credentials and send nothing from your sessions. With `--comments` and `--base`/`--head`, and a checkout that already has both commits, it makes no network call at all.
 
 **A map document never contains:**
 
@@ -297,7 +295,7 @@ The format is deliberately independent of this tool. If you build an agent, an o
 
 ## Configuration
 
-All configuration is through environment variables. The examples in this README use bash syntax; in PowerShell, set one with `$env:AGENTPLAY_NO_NETWORK = "1"` before running `agentplay` (it lasts for that session), and in cmd use `set AGENTPLAY_NO_NETWORK=1`.
+All configuration is through environment variables. The examples in this README use bash syntax; in PowerShell, set one with `$env:AGENTPLAY_HOME = "D:\agentplay"` before running `agentplay` (it lasts for that session), and in cmd use `set AGENTPLAY_HOME=D:\agentplay`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -310,9 +308,7 @@ All configuration is through environment variables. The examples in this README 
 | `AGENTPLAY_OPENCODE_HOMES` | `$XDG_DATA_HOME/opencode` | OpenCode data dirs |
 | `AGENTPLAY_KIRO_HOMES` | `~/.kiro` | Kiro homes |
 | `AGENTPLAY_HMAC_KEY` | unset | key for `--path-mode hashed` |
-| `DO_NOT_TRACK`, `AGENTPLAY_NO_NETWORK` | unset | set either to turn off the email signup and its one network call |
-| `AGENTPLAY_SIGNUP_URL` | built in | where the signup sends an email (for testing; see [docs/signup-endpoint.md](docs/signup-endpoint.md)) |
-| `AGENTPLAY_DEV_ORIGINS` | unset | comma-separated extra origins allowed to post to the local server, for the viewer's dev server: `http://localhost:5173` |
+| `AGENTPLAY_DEV_ORIGINS` | unset | comma-separated extra origins the local server trusts, for the viewer's dev server: `http://localhost:5173` |
 | `NO_COLOR` | unset | disable terminal styling |
 
 ## Development
