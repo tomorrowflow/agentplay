@@ -9,7 +9,9 @@ services:
       - "127.0.0.1:${AGENTPLAY_PORT:-7317}:7317"
     environment:
       AGENTPLAY_HOME: /data
-      AGENTPLAY_CLAUDE_HOMES: ${CLAUDE_HOME:-${HOME}/.claude}
+      # Extra homes (comma-separated) must sit under CODE_ROOT or CLAUDE_HOME to be mounted.
+      AGENTPLAY_CLAUDE_HOMES: ${AGENTPLAY_CLAUDE_HOMES:-${CLAUDE_HOME:-${HOME}/.claude}}
+      AGENTPLAY_REPO_ROOTS: ${AGENTPLAY_REPO_ROOTS:-}
       # Edits are labelled relative to home ("~ (home)", "~/Documents").
       HOME: ${HOME}
     volumes:
@@ -28,6 +30,8 @@ services:
       - ${AGENTPLAY_PUBLIC_HOST:?set AGENTPLAY_PUBLIC_HOST to the hostname you browse to, e.g. myhost.tailnet-name.ts.net}
       - --rescan
       - ${AGENTPLAY_RESCAN:-600}
+      - --agents
+      - ${AGENTPLAY_AGENTS:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:7317/api/status', headers={'Host': 'localhost'}), timeout=5)"]
       interval: 30s
