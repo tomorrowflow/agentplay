@@ -451,6 +451,84 @@ def test_a_rebinding_page_reads_nothing(env, path):
         httpd.server_close()
 
 
+@contextlib.contextmanager
+def _remote_server(env, allowed: frozenset[str]):
+    """A server trusting ``allowed`` whose every peer looks like the Docker bridge gateway."""
+    _write_claude_session(env["home"], "dddddddd-0000-0000-0000-00000000000d", env["repo"])
+    pipeline.build_all(agents={"claude-code"}, store=Store(env["sm"]))
+    st = Store(env["sm"])
+    httpd = serve(0, store=st, host="127.0.0.1", allowed_hosts=allowed)
+    base_handler = httpd.RequestHandlerClass
+
+    class RemoteHandler(base_handler):  # type: ignore[valid-type, misc]
+        def setup(self) -> None:
+            super().setup()
+            self.client_address = ("172.17.0.1", 51000)
+
+    httpd.RequestHandlerClass = RemoteHandler
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def request(path: str, headers: dict[str, str], data: bytes | None = None) -> tuple[int, str]:
+        req = urllib.request.Request(base + path, headers=headers, data=data)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    try:
+        yield request, st.rows()[0]["sessionId"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+ALLOWED = frozenset({"allowed.example"})
+
+
+@pytest.mark.parametrize("host", ["allowed.example", "allowed.example:8443", "ALLOWED.example:443"])
+def test_an_allowed_host_reads_everything_from_any_peer(env, host):
+    with _remote_server(env, ALLOWED) as (request, sid):
+        status, body = request("/api/status", {"Host": host})
+        assert status == 200 and json.loads(body)["mapCount"] == 1
+        status, body = request("/api/sessions", {"Host": host})
+        assert status == 200 and len(json.loads(body)["sessions"]) == 1
+        status, body = request(f"/api/map-doc?id={urllib.request.quote(sid, safe='')}", {"Host": host})
+        assert status == 200 and json.loads(body)["tasks"][0]["name"] == "please fix the SECRET-PROMPT bug"
+        same_site = {"Host": host, "Origin": "https://allowed.example:8443", "Sec-Fetch-Site": "same-origin"}
+        assert request("/api/status", same_site)[0] == 200
+
+
+@pytest.mark.parametrize(("allowed", "headers"), [
+    (frozenset(), {"Host": "allowed.example"}),                     # no allowlist: today's rule
+    (frozenset(), {"Host": "127.0.0.1:7317"}),                      # a local Host from a remote peer
+    (ALLOWED, {"Host": "evil.example"}),
+    (ALLOWED, {"Host": "allowed.example.evil.test"}),
+    (ALLOWED, {"Host": "evil.allowed.example"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "https://evil.example"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "https://allowed.example.evil.test"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "null"}),
+    (ALLOWED, {"Host": "allowed.example", "Sec-Fetch-Site": "cross-site"}),
+])
+def test_anything_else_from_a_remote_peer_reads_nothing(env, allowed, headers):
+    with _remote_server(env, allowed) as (request, sid):
+        for path in ("/api/status", "/api/sessions", f"/api/map-doc?id={urllib.request.quote(sid, safe='')}"):
+            status, body = request(path, headers)
+            assert status == 403, path
+            assert "SECRET-PROMPT" not in body
+
+
+def test_an_allowed_host_still_cannot_post_or_see_the_account(env):
+    with _remote_server(env, ALLOWED) as (request, _sid):
+        headers = {"Host": "allowed.example", "Origin": "http://allowed.example", "Content-Type": "application/json"}
+        status, _ = request("/api/account", headers, data=b'{"action": "skip"}')
+        assert status == 403
+        status, body = request("/api/account", {"Host": "allowed.example"})
+        assert status == 200 and json.loads(body) == {"success": True, "status": "none", "email": None, "enabled": False}
+    assert not (env["sm"] / "account.json").exists()
+
+
 def test_server_picks_up_sessions_built_while_it_runs(env):
     """`view` serves first and scans in a background thread, so a Store held for
     the server's lifetime has to notice an index written underneath it."""
