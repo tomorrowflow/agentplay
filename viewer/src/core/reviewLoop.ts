@@ -1,4 +1,4 @@
-import type { ReviewAttribution, ReviewComment, ReviewDoc, SessionMap } from './schema';
+import type { ReviewComment, ReviewDoc, SessionMap } from './schema';
 import { subagentOrdinal } from './sessionMapModel';
 
 /**
@@ -22,7 +22,7 @@ export function reviewLoopView(query: {
   return query.isLoading ? { kind: 'pending' } : { kind: 'locked' };
 }
 
-const UNKNOWN_LABEL: Record<Extract<ReviewAttribution, { kind: 'unknown' }>['reason'], string> = {
+const UNKNOWN_LABEL: Partial<Record<string, string>> = {
   base: 'Unchanged from the PR base',
   not_observed: 'No recorded edit wrote this line',
   ambiguous: 'Several sessions made this same edit',
@@ -65,7 +65,7 @@ export function realCommentCard(c: ReviewComment, map: SessionMap, stale = false
     text: c.body,
   };
   if (a.kind === 'unknown') {
-    return { ...card, editSeq: null, badge: UNKNOWN_LABEL[a.reason], path: [], otherSession: null };
+    return { ...card, editSeq: null, badge: UNKNOWN_LABEL[a.reason] ?? 'Not attributed', path: [], otherSession: null };
   }
   if (stale && a.session === map.session.id) {
     return { ...card, editSeq: null, badge: 'Traced to an edit', path: [], otherSession: null };

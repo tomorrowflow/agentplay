@@ -111,6 +111,13 @@ describe('realCommentCard', () => {
     expect(realCommentCard(stale.comments[0], map, stale.stale)).toMatchObject({ editSeq: null, path: [] });
   });
 
+  it('keeps a doc whose unknown reason it does not know, with a generic label', () => {
+    const [newer] = parseReviews({
+      reviews: [doc([{ ...unknown, attribution: { kind: 'unknown', reason: 'from_the_future' } }])],
+    });
+    expect(realCommentCard(newer.comments[0], map).badge).toBe('Not attributed');
+  });
+
   it('does not light this map for an edit in another session', () => {
     const other = {
       ...review.comments[0],

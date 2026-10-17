@@ -197,17 +197,6 @@ export type HookDetailResponse = z.infer<typeof hookDetailResponseSchema>;
 
 export const REVIEW_SCHEMA_V1 = 'agentplay-review/v1';
 
-export const UNKNOWN_ATTRIBUTION_REASONS = [
-  'base',
-  'not_observed',
-  'ambiguous',
-  'unplaced',
-  'line_out_of_range',
-  'line_split_differs',
-  'file_not_in_head',
-  'no_evidence',
-] as const;
-
 /** Which edit wrote the commented head line, or why that is not known. */
 export const reviewAttributionSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -220,7 +209,8 @@ export const reviewAttributionSchema = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('unknown'),
-    reason: z.enum(UNKNOWN_ATTRIBUTION_REASONS),
+    /** open-ended, so a reason a newer `agentplay review` adds does not drop the whole doc */
+    reason: z.string(),
   }),
 ]);
 export type ReviewAttribution = z.infer<typeof reviewAttributionSchema>;

@@ -393,3 +393,12 @@ def test_a_review_goes_stale_for_a_session_whose_map_was_rebuilt(env, capsys):
     assert [r["stale"] for r in review.reviews_for(st, SID)] == [False]
     st.index[SID]["contentHash"] = "rebuilt"
     assert [r["stale"] for r in review.reviews_for(st, SID)] == [True]
+
+
+def test_loaded_comments_get_unique_ids(tmp_path):
+    from agentplay import review
+
+    f = _comments(tmp_path, [{"id": "1", "path": "a", "line": 1, "body": ""}, {"path": "a", "line": 2, "body": ""},
+                             {"id": "1", "path": "a", "line": 3, "body": ""}])
+    ids = [c["id"] for c in review.load_comments(f)]
+    assert len(set(ids)) == 3 and ids[0] == "1"

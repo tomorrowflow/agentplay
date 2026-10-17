@@ -78,7 +78,7 @@ def load_comments(path: Path) -> list[dict[str, Any]]:
         raise ReviewError(f"can't read {path}: {exc}") from None
     if not isinstance(raw, dict) or raw.get("schema") != INPUT_SCHEMA or not isinstance(raw.get("comments"), list):
         raise ReviewError(f"{path} is not an {INPUT_SCHEMA} document")
-    out = []
+    out, seen = [], set()
     for i, c in enumerate(raw["comments"]):
         if (
             not isinstance(c, dict)
@@ -87,8 +87,12 @@ def load_comments(path: Path) -> list[dict[str, Any]]:
             or not isinstance(c.get("body"), str)
         ):
             raise ReviewError(f"{path}: comment {i} needs a string path, an integer line and a string body")
+        cid = str(c.get("id") or "")
+        while not cid or cid in seen:
+            cid = f"{cid}#{i}"
+        seen.add(cid)
         out.append({
-            "id": str(c.get("id") or i),
+            "id": cid,
             "url": c.get("url") if isinstance(c.get("url"), str) else None,
             "author": c.get("author") if isinstance(c.get("author"), str) else None,
             "source": c.get("source") if isinstance(c.get("source"), str) else "file",
