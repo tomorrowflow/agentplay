@@ -212,13 +212,18 @@ def _started(doc: dict[str, Any]) -> float:
 
 
 def _pr_repo_ids(doc: dict[str, Any], pr: PullRequest) -> set[str]:
-    """The map's repo ids for the PR's repository: same remote, or a fork's clone of it (same name)."""
+    """The map's repo ids for the PR's repository.
+
+    The same remote when the map has one; otherwise a repo with the same name,
+    the case of a fork's clone. Never both, so another same-named repo the
+    session also touched stays out of the replay.
+    """
+    repos = doc.get("repos", [])
+    by_remote = {r["id"] for r in repos if str(r.get("remote") or "").lower() == pr.repo.lower()}
+    if by_remote:
+        return by_remote
     name = pr.repo.lower().rsplit("/", 1)[-1]
-    return {
-        r["id"]
-        for r in doc.get("repos", [])
-        if str(r.get("remote") or "").lower() == pr.repo.lower() or str(r.get("name") or "").lower() == name
-    }
+    return {r["id"] for r in repos if str(r.get("name") or "").lower() == name}
 
 
 def _observed_edits(

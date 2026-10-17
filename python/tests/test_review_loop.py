@@ -363,3 +363,22 @@ def test_comment_lines_count_newlines_only_like_git():
     assert _attr(base, head, edits, 4) == {"kind": "unknown", "reason": "base"}
     assert _attr(base, head, edits, 2) == {"kind": "unknown", "reason": "line_split_differs"}
     assert _attr(base, head, edits, 5) == {"kind": "unknown", "reason": "line_out_of_range"}
+
+
+def _repo_edits(repos: list[dict[str, Any]]) -> list[str]:
+    from agentplay import review
+
+    doc = {"session": {"startedAt": "2026-10-01T00:00:00Z"}, "events": [], "repos": repos}
+    evidence = {"edits": [{**_edit("s1", i, ["a"], ["b"]), "seq": i, "repo": r["id"], "path": r["id"]}
+                          for i, r in enumerate(repos)]}
+    return sorted(review._observed_edits({"s1": (doc, evidence)}, review.PullRequest("acme/app", 7)))
+
+
+def test_review_takes_edits_from_the_pr_remote_before_a_same_named_repo():
+    assert _repo_edits([{"id": "r0", "name": "app", "remote": "acme/app"},
+                        {"id": "r1", "name": "app", "remote": "other/app"}]) == ["r0"]
+
+
+def test_review_falls_back_to_the_repo_name_for_a_fork_clone():
+    assert _repo_edits([{"id": "r0", "name": "app", "remote": "me/app"},
+                        {"id": "r1", "name": "web", "remote": "acme/web"}]) == ["r0"]
