@@ -256,6 +256,8 @@ export const reviewDocSchema = z
     sessions: z.array(z.string()),
     builtAt: z.string(),
     comments: z.array(reviewCommentSchema),
+    /** set by the server: this session's map was rebuilt since the review, so its seqs may have moved */
+    stale: z.boolean().default(false),
   })
   .passthrough();
 export type ReviewDoc = z.infer<typeof reviewDocSchema>;

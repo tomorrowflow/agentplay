@@ -153,10 +153,15 @@ function ReviewLoopReal({
             <a href={r.pr.url} target="_blank" rel="noopener noreferrer" className="underline">
               {r.pr.repo} #{r.pr.number}
             </a>
-            {onPath ? ' \u00b7 pick one to light its path on the map' : null}
+            {onPath && !r.stale ? ' \u00b7 pick one to light its path on the map' : null}
           </p>
+          {r.stale ? (
+            <p className="ds-text-body-xs-medium text-ds-text-subtle">
+              Map rebuilt since this review; rerun agentplay review to light its paths.
+            </p>
+          ) : null}
           {r.comments.map((raw) => {
-            const c = realCommentCard(raw, map);
+            const c = realCommentCard(raw, map, r.stale);
             return (
               <ReviewCommentCard
                 key={c.id}

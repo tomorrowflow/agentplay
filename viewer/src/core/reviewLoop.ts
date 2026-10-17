@@ -55,7 +55,7 @@ export interface RealCommentCard {
   otherSession: string | null;
 }
 
-export function realCommentCard(c: ReviewComment, map: SessionMap): RealCommentCard {
+export function realCommentCard(c: ReviewComment, map: SessionMap, stale = false): RealCommentCard {
   const a = c.attribution;
   const card = {
     id: c.id,
@@ -66,6 +66,9 @@ export function realCommentCard(c: ReviewComment, map: SessionMap): RealCommentC
   };
   if (a.kind === 'unknown') {
     return { ...card, editSeq: null, badge: UNKNOWN_LABEL[a.reason], path: [], otherSession: null };
+  }
+  if (stale && a.session === map.session.id) {
+    return { ...card, editSeq: null, badge: 'Traced to an edit', path: [], otherSession: null };
   }
   const badge = a.shared ? `edit #${a.seq} · also written in another session` : `edit #${a.seq}`;
   if (a.session !== map.session.id) {

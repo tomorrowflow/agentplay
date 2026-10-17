@@ -382,3 +382,14 @@ def test_review_takes_edits_from_the_pr_remote_before_a_same_named_repo():
 def test_review_falls_back_to_the_repo_name_for_a_fork_clone():
     assert _repo_edits([{"id": "r0", "name": "app", "remote": "me/app"},
                         {"id": "r1", "name": "web", "remote": "acme/web"}]) == ["r0"]
+
+
+def test_a_review_goes_stale_for_a_session_whose_map_was_rebuilt(env, capsys):
+    from agentplay import review
+
+    _, doc = _review(env, capsys, [{"id": "c1", "path": "src/app.py", "line": 2, "body": "x"}])
+    st = Store(env["sm"])
+    assert doc["maps"] == {SID: st.index[SID]["contentHash"]}
+    assert [r["stale"] for r in review.reviews_for(st, SID)] == [False]
+    st.index[SID]["contentHash"] = "rebuilt"
+    assert [r["stale"] for r in review.reviews_for(st, SID)] == [True]

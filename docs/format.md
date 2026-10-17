@@ -273,6 +273,7 @@ The reference tool keeps two more kinds of document next to the maps. Neither is
   "schema": "agentplay-review/v1",
   "pr": { "repo": "acme/api", "number": 142, "url": "https://github.com/acme/api/pull/142", "base": "<sha>", "head": "<sha>" },
   "sessions": ["local:claude-code:5f2c…"],
+  "maps": { "local:claude-code:5f2c…": "<contentHash>" },
   "builtAt": "2026-10-17T10:00:00Z",
   "comments": [
     { "id": "c1", "url": null, "author": "reviewer", "source": "file", "path": "src/orders.ts", "line": 38, "body": "…",
@@ -287,4 +288,5 @@ The reference tool keeps two more kinds of document next to the maps. Neither is
 - **`attribution`** is either `{"kind": "edit", …}`, the session, map seq and agent of the edit that owns the commented head line after replaying the sessions' edit evidence over the PR base, or `{"kind": "unknown", "reason": …}`. `shared` is true when another listed session's edit wrote that line before the owning edit replaced it.
 - **Reasons:** `base` (the replay carried the line through from the PR base untouched), `not_observed` (no placed edit wrote the line: it was written or rewritten outside the sessions), `ambiguous` (the edit that wrote it was observed, identically, in more than one session), `unplaced` (an edit that inserted this text could not be placed in the replay, so its position is unknown), `line_out_of_range` (the head file has no such line), `line_split_differs` (the line holds a character that ends a line for the replay but not for git, such as a form feed, so which part of it was meant is unknown; later lines are still counted as git counts them), `file_not_in_head` and `no_evidence` (none of the sessions has edit evidence for that file).
 - **`causalPath`** comes from the attributed session's map alone, so it is content-free: up to five events of the same agent that touched the edited file up to and including the edit, then the first `verify` after it. `label` is the tool and the map's path, or the shell verb.
+- **`maps`** is each session's map `contentHash` at the time of the review. A rebuild can renumber seqs, so `GET /api/reviews` adds `"stale": true` to a doc whose hash for the requested session no longer matches, and the viewer then neither lights paths nor seeks for it.
 - `body`, `author` and `url` are the comment as given. They live only in this file.

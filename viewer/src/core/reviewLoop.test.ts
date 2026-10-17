@@ -105,6 +105,12 @@ describe('realCommentCard', () => {
     });
   });
 
+  it('neither lights nor seeks when the map was rebuilt since the review', () => {
+    const [stale] = parseReviews({ reviews: [{ ...doc([edited]), stale: true }] });
+    expect(stale.stale).toBe(true);
+    expect(realCommentCard(stale.comments[0], map, stale.stale)).toMatchObject({ editSeq: null, path: [] });
+  });
+
   it('does not light this map for an edit in another session', () => {
     const other = {
       ...review.comments[0],

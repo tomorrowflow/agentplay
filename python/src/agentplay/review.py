@@ -355,6 +355,8 @@ def build_review(
         "pr": {"repo": pr.repo, "number": pr.number, "url": pull.get("url") or pr.url,
                "base": pull["base"], "head": pull["head"]},
         "sessions": sessions,
+        # seqs move when a map is rebuilt; this is how a reader tells
+        "maps": {sid: store.index[sid].get("contentHash") for sid in sessions},
         "builtAt": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "comments": out,
     }
@@ -374,7 +376,11 @@ def save_review(store: Store, doc: dict[str, Any]) -> Path:
 
 
 def reviews_for(store: Store, session_id: str) -> list[dict[str, Any]]:
-    """Every stored review doc that lists ``session_id``, newest first."""
+    """Every stored review doc that lists ``session_id``, newest first.
+
+    Each carries ``stale``: true when the session's map was rebuilt since the
+    review, so the seqs it cites may point at other events now.
+    """
     found = []
     for path in sorted(reviews_dir(store).glob("*.json")):
         try:
@@ -382,5 +388,6 @@ def reviews_for(store: Store, session_id: str) -> list[dict[str, Any]]:
         except (OSError, ValueError):
             continue
         if isinstance(doc, dict) and doc.get("schema") == REVIEW_SCHEMA and session_id in (doc.get("sessions") or []):
-            found.append(doc)
+            current = (store.index.get(session_id) or {}).get("contentHash")
+            found.append({**doc, "stale": (doc.get("maps") or {}).get(session_id) != current})
     return sorted(found, key=lambda d: str(d.get("builtAt") or ""), reverse=True)
