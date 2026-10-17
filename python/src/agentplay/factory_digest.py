@@ -25,7 +25,9 @@ from .store import Store, _atomic_write
 
 DIGEST_SCHEMA = "agentplay-factory-digest/v1"
 DAY_MS = 86_400_000
-# Card attempt times are stored with second precision; transcript times are not.
+# A map's session.startedAt drops its fraction of a second, so an event placed at
+# startedAt + t can sit up to a second before its real time. Workboard attempt
+# times are Date.now() milliseconds.
 SLACK_MS = 1000
 
 AttemptStatus = Literal["running", "succeeded", "failed", "blocked", "stopped"]

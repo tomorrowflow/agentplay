@@ -183,8 +183,8 @@ def test_an_event_in_the_overlap_goes_to_the_later_attempt_and_slack_covers_whol
     ])})
     doc = _digest(st, [_card(CARD_A, "Card A", [
         _attempt("outer", "failed", _at(10, 0), None),
-        # the card rounds to seconds, so its end can fall just before the last call
-        _attempt("inner", "succeeded", _at(10, 5), _at(10, 10) - timedelta(milliseconds=500)),
+        # the map's start has no milliseconds, so the first call can sit just before the attempt's start
+        _attempt("inner", "succeeded", _at(10, 10) + timedelta(milliseconds=500), _at(10, 20)),
     ], published=_at(11, 0))])
     outer, inner = _by_id(doc)[CARD_A]["attempts"]
     assert (outer["metrics"]["edits"], outer["metrics"]["requests"]) == (1, 1)
