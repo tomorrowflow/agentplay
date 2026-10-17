@@ -7,6 +7,10 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,7 @@ import pytest
 
 from agentplay import cli, pipeline
 from agentplay._core.code_authorship import line_fingerprints
+from agentplay.server import serve
 from agentplay.store import Store
 
 STEM = "77777777-0000-0000-0000-000000000007"
@@ -261,3 +266,32 @@ def test_review_reads_github_through_gh_when_asked(env, capsys, monkeypatch):
     assert (c["id"], c["author"], c["source"], c["url"]) == (
         "1", "rev", "github", "https://github.com/acme/app/pull/7#discussion_r1")
     assert c["attribution"]["kind"] == "edit"
+
+
+# ---------------------------------------------------------------- /api/reviews
+def _get(base: str, path: str, headers: dict[str, str] | None = None) -> tuple[int, Any]:
+    req = urllib.request.Request(base + path, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read())
+    except urllib.error.HTTPError as err:
+        return err.code, json.loads(err.read())
+
+
+def test_reviews_endpoint_serves_the_docs_that_list_a_session(env, capsys):
+    _review(env, capsys, [{"id": "c1", "path": "src/app.py", "line": 2, "body": "SECRET-REVIEW-BODY"}])
+    httpd = serve(0, store=Store(env["sm"]))
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        status, body = _get(base, "/api/reviews?id=" + urllib.parse.quote(SID, safe=""))
+        assert status == 200 and [r["pr"]["number"] for r in body["reviews"]] == [7]
+        assert body["reviews"][0]["comments"][0]["body"] == "SECRET-REVIEW-BODY"
+        assert _get(base, "/api/reviews?id=local%3Aclaude-code%3Aother") == (200, {"success": True, "reviews": []})
+        assert _get(base, "/api/reviews")[0] == 400
+        status, body = _get(base, "/api/reviews?id=" + urllib.parse.quote(SID, safe=""),
+                            {"Host": "evil.example:7317"})
+        assert status == 403 and "SECRET-REVIEW-BODY" not in json.dumps(body)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
