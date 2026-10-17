@@ -1,0 +1,39 @@
+# Copy .env.example to .env and set AGENTPLAY_PUBLIC_HOST before `docker compose up -d`.
+services:
+  agentplay:
+    build: .
+    restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      # Loopback only: reach it from elsewhere through Tailscale Serve, never by publishing it wider.
+      - "127.0.0.1:${AGENTPLAY_PORT:-7317}:7317"
+    environment:
+      AGENTPLAY_HOME: /data
+      # Extra homes (comma-separated) must sit under CODE_ROOT or CLAUDE_HOME to be mounted.
+      AGENTPLAY_CLAUDE_HOMES: ${AGENTPLAY_CLAUDE_HOMES:-${CLAUDE_HOME:-${HOME}/.claude}}
+      AGENTPLAY_REPO_ROOTS: ${AGENTPLAY_REPO_ROOTS:-}
+      # Edits are labelled relative to home ("~ (home)", "~/Documents").
+      HOME: ${HOME}
+    volumes:
+      - ${AGENTPLAY_STORE:-${HOME}/.agentplay}:/data
+      # Same absolute paths as on the host. The index records each transcript's
+      # path, pasted images and hook details are re-read from it on demand, and a
+      # session's repo is found by reading `.git` above the files it edited.
+      - ${CODE_ROOT:-${HOME}}:${CODE_ROOT:-${HOME}}:ro
+      - ${CLAUDE_HOME:-${HOME}/.claude}:${CLAUDE_HOME:-${HOME}/.claude}:ro
+    command:
+      - view
+      - --host
+      - 0.0.0.0
+      - --no-open
+      - --allow-host
+      - ${AGENTPLAY_PUBLIC_HOST:?set AGENTPLAY_PUBLIC_HOST to the hostname you browse to, e.g. myhost.tailnet-name.ts.net}
+      - --rescan
+      - ${AGENTPLAY_RESCAN:-600}
+      - --agents
+      - ${AGENTPLAY_AGENTS:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:7317/api/status', headers={'Host': 'localhost'}), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s

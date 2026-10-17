@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import threading
+import time
 import warnings
 import webbrowser
 from collections import Counter
@@ -20,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
-from . import __version__, discover, pipeline
+from . import __version__, builder, discover, pipeline
 from .store import Store
 
 _TTY = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -197,14 +198,46 @@ def _background_scan(args: argparse.Namespace) -> None:
     print(_dim(f"Scan done: {built} of {rep.found} sessions{skipped} in {rep.seconds}s. Reload to see them."), flush=True)
 
 
+def _scan_loop(args: argparse.Namespace) -> None:
+    # One thread runs every scan in turn, so scans never overlap each other.
+    _background_scan(args)
+    while args.rescan:
+        time.sleep(args.rescan)
+        _background_scan(args)
+
+
+_HOSTNAME_RE = re.compile(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?")
+
+
+def _allow_host(value: str) -> str:
+    name = value.strip().lower().rstrip(".")
+    if not _HOSTNAME_RE.fullmatch(name):
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not a hostname; pass the bare name the browser uses, without scheme, port or path "
+            "(e.g. myhost.tailnet-name.ts.net)")
+    return name
+
+
+def _seconds(value: str) -> int:
+    if not (value.isascii() and value.isdigit()):
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number of seconds")
+    return int(value)
+
+
 def cmd_view(args: argparse.Namespace) -> int:
-    from .server import serve, viewer_root
+    from .server import _is_loopback, serve, viewer_root
 
     # Serve first, then scan in the background. A scan can take a long time
     # (decoding database-backed agents such as Cursor dominates it), and
     # everything already built is servable immediately; the index is re-read
     # as new maps land.
-    httpd = serve(args.port)
+    host = args.host or "127.0.0.1"
+    allowed = frozenset(args.allow_host or ())
+    try:
+        httpd = serve(args.port, host=host, allowed_hosts=allowed, exact_port=args.host is not None)
+    except OSError as exc:
+        print(f"agentplay: can't listen on {host}:{args.port}: {exc.strerror or exc}", file=sys.stderr)
+        return 1
     port = httpd.server_address[1]
     if args.port and port != args.port:
         print(f"Port {args.port} is busy; using {port} instead.", file=sys.stderr, flush=True)
@@ -212,12 +245,16 @@ def cmd_view(args: argparse.Namespace) -> int:
     if viewer_root() is None:
         print(_dim("The web viewer is not bundled in this install (source checkout?). The API is still up; "
                    "run `make viewer` to build it."))
+    if not _is_loopback(host):
+        print(f"Listening on {host}:{port}. " + (
+            f"Trusted hosts: {', '.join(sorted(allowed))}." if allowed
+            else "No --allow-host given, so the API refuses every read that is not from this machine."), flush=True)
     # Flushed: stdout is block-buffered when it is not a tty, and "the viewer is
     # ready" is worthless to anything wrapping or piping us if it arrives at exit.
     print(f"Viewer → {_b(url)}   {_dim('(Ctrl+C to stop)')}", flush=True)
     if not args.no_build:
         print(_dim("Scanning for new sessions in the background…"), flush=True)
-        threading.Thread(target=_background_scan, args=(args,), daemon=True).start()
+        threading.Thread(target=_scan_loop, args=(args,), daemon=True).start()
     if not args.no_open:
         threading.Timer(0.3, lambda: webbrowser.open(url)).start()
     try:
@@ -401,6 +438,12 @@ def parser() -> argparse.ArgumentParser:
     v.add_argument("--port", type=int, default=7317)
     v.add_argument("--no-open", action="store_true", help="don't open a browser")
     v.add_argument("--no-build", action="store_true", help="serve what's already built")
+    v.add_argument("--host", help="interface to listen on (default 127.0.0.1); fails if the port is busy")
+    v.add_argument("--allow-host", action="append", type=_allow_host, metavar="NAME",
+                   help="trust requests whose Host is NAME from any peer (repeatable); "
+                        "anyone who reaches the port with it reads your sessions")
+    v.add_argument("--rescan", type=_seconds, default=0, metavar="SECONDS",
+                   help="scan for new sessions again every SECONDS (default 0: once at start)")
     v.set_defaults(fn=cmd_view)
 
     b = sub.add_parser("build", parents=[common], help="build maps for new or changed sessions")
@@ -469,6 +512,11 @@ def main(argv: list[str] | None = None) -> int:
         warnings.simplefilter("ignore")
     if not getattr(args, "fn", None):
         args = ap.parse_args(["view", *(argv or sys.argv[1:])])
+    try:
+        # Checked up front: inside a build it would fail every session one by one.
+        builder.parse_repo_roots(os.environ.get("AGENTPLAY_REPO_ROOTS", ""))
+    except ValueError as exc:
+        raise SystemExit(f"agentplay: {exc}") from None
     try:
         rv = args.fn(args)
     except KeyboardInterrupt:

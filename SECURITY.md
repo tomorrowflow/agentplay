@@ -3,8 +3,8 @@
 agentplay reads sensitive local data: your coding agents' transcripts. We treat three kinds of bug as security issues:
 
 - **Redaction bugs:** any path by which a map, a log line, the local API or the viewer exposes prompt text, model output, tool input or output, file contents, command arguments or credentials.
-- **Local server issues:** the viewer server is meant to bind only to `127.0.0.1` and serve read-only data. Anything that lets another origin or another machine read it, or lets a request write data, is a security issue. The one write, `POST /api/account`, must only be accepted from the local viewer.
-- **Anything leaving the machine** beyond what the README's privacy section lists for the email signup.
+- **Local server issues:** the viewer server is meant to bind only to `127.0.0.1` and serve read-only data. Anything that lets another origin or another machine read it, or lets a request write data, is a security issue.
+- **Anything leaving the machine** beyond what the README's privacy section lists for `agentplay review`.
 
 ## Reporting
 

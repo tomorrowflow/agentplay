@@ -1,18 +1,22 @@
 """Local viewer server: the bundled web viewer plus a small read-only JSON API.
 
-Binds to 127.0.0.1 only. Serves the static viewer from the package's
+Binds to 127.0.0.1 by default. Serves the static viewer from the package's
 ``viewer/`` directory and these endpoints over the local store:
 
 ``GET /api/status``            ``{available, mapCount, latestSessionDate}``
 ``GET /api/sessions``          paged session rows (``from``, ``to``, ``search``, ``pageSize``, ``cursor``)
 ``GET /api/map``               one entry per ``session_id`` param, each with a ``url``
 ``GET /api/map-doc?id=...``    the map document itself
-``GET /api/account``           whether to offer the email signup card (see ``account.py``)
 ``GET /api/prompt-images?id=...``  per-turn metadata for images pasted into Claude Code prompts (this machine only)
 ``GET /api/prompt-image?id=...&turn=...&i=...``  one such image, read from the transcript on demand (this machine only)
 ``GET /api/hook-detail?id=...&uuid=...``  the message and command of one hook failure, read from the transcript on demand (this machine only)
 ``GET /api/reviews?id=...``    the ``agentplay review`` docs that list this session (this machine only)
-``POST /api/account``          ``{"action": "signup", "email": ...}``, ``{"action": "skip"}``, ``{"action": "disconnect"}``
+
+Every read needs a trusted request (see ``_Handler._trusted``): a loopback peer
+naming this machine in ``Host``, or a ``Host`` the operator listed with
+``--allow-host`` (``serve(allowed_hosts=...)``). Bound to another interface with no
+allowed host, the server refuses every read. "This machine only" below means the
+trusted viewer.
 
 Pasted images are read from the original transcript when asked for and never
 stored in a map, the index or an export; see ``prompt_images.py``. Hook failure
@@ -20,8 +24,8 @@ messages and commands are read the same way; see ``hook_detail.py``. Review docs
 hold PR comment text and are local files written by ``agentplay review``; see
 ``review.py``.
 
-The only write is ``~/.agentplay/account.json``, and the only thing that can leave
-the machine is an email the user typed into the signup card.
+The server writes nothing and sends nothing off the machine. Every ``POST`` is
+answered 405.
 """
 
 from __future__ import annotations
@@ -41,14 +45,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import account, hook_detail, prompt_images, review
+from . import hook_detail, prompt_images, review
 from .store import Store
 
 MAX_PAGE = 200
 DEFAULT_PAGE = 50
-MAX_BODY = 4096
 _LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
-# Extra origins allowed to post (comma-separated), e.g. the viewer's Vite dev
+# Extra origins allowed to read (comma-separated), e.g. the viewer's Vite dev
 # server at http://localhost:5173. Nothing else but this server's own origin.
 DEV_ORIGINS_ENV = "AGENTPLAY_DEV_ORIGINS"
 _FETCH_SITES = {"same-origin", "none"}
@@ -115,20 +118,40 @@ def _is_loopback(address: Any) -> bool:
     return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
 
 
-def _local_origin(value: str | None) -> bool:
-    """Whether a ``Host`` value names this machine (any port).
+def _hostname(value: str | None) -> str | None:
+    """The lowercase hostname a ``Host`` value names (any port), None if malformed.
 
     Any port, because the viewer's dev server proxies to this one with its own
-    Host. ``Origin`` is held to a stricter rule: see ``_Handler._allowed_origin``.
+    Host, and Tailscale Serve forwards its public port. ``Origin`` is held to a
+    stricter rule: see ``_Handler._allowed_origin``.
     """
     if not value:
-        return False
+        return None
     try:
         parts = urlsplit(value if "//" in value else f"//{value}")
         host, _ = parts.hostname or "", parts.port  # `.port` raises on a bad or out-of-range port
     except ValueError:
-        return False
-    return (f"[{host}]" if ":" in host else host) in _LOCAL_HOSTS
+        return None
+    return (f"[{host}]" if ":" in host else host) or None
+
+
+def _origin_authority(origin: str) -> tuple[str, int | None] | None:
+    """``(hostname, port)`` of an ``http(s)://host[:port]`` origin, None for anything else (``null`` included)."""
+    try:
+        parts = urlsplit(origin.strip())
+        port = parts.port
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or parts.path or parts.query or parts.fragment:
+        return None
+    host = _hostname(parts.netloc)
+    return (host, port) if host else None
+
+
+def _host_authority(value: str | None) -> tuple[str, int | None] | None:
+    """``(hostname, port)`` of a ``Host`` value, None if malformed."""
+    host = _hostname(value)
+    return (host, urlsplit(f"//{value}").port) if host else None
 
 
 def _with_task_titles(doc: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
@@ -139,9 +162,9 @@ def _with_task_titles(doc: dict[str, Any], row: dict[str, Any]) -> dict[str, Any
     map with no prompt text in it, which is what `agentplay export` writes and what
     the format contract promises — see `discover.local_task_titles`.
 
-    Callers must merge only for a loopback peer (`_is_loopback`): the API is
-    unauthenticated, so on a server bound to a non-loopback host this would hand
-    the user's prompt text to anyone who can reach the port.
+    Callers must merge only for a trusted request (`_Handler._trusted`): the API
+    is unauthenticated, so on a server bound to a non-loopback host this would
+    hand the user's prompt text to anyone who can reach the port.
 
     Only fills a task whose name is empty, so a name the builder derived from a
     named span still wins.
@@ -192,6 +215,7 @@ class _Handler(BaseHTTPRequestHandler):
     timeout = 15
     store: Store
     static: Path | None
+    allowed_hosts: frozenset[str] = frozenset()
     lock = threading.Lock()
 
     def log_message(self, fmt: str, *args: Any) -> None:  # quiet by default
@@ -254,16 +278,34 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _from_this_machine(self) -> bool:
-        """Whether a read may include the user's own data (task labels, the email).
+    def _local_viewer(self) -> bool:
+        """Whether the request comes from the viewer on this machine.
 
         A loopback peer is not enough: a DNS-rebinding page reaches 127.0.0.1 under
         its own hostname and reads the answer as same-origin. So the Host must name
         this machine, and so must the Origin whenever a browser sends one.
         """
         origin = self.headers.get("Origin")
-        return (_is_loopback(self.client_address) and _local_origin(self.headers.get("Host"))
+        return (_is_loopback(self.client_address) and _hostname(self.headers.get("Host")) in _LOCAL_HOSTS
                 and (origin is None or self._allowed_origin(origin)))
+
+    def _trusted(self) -> bool:
+        """Whether a read may include the user's own data (titles, task labels, transcripts).
+
+        The local viewer, or a request whose Host is one the operator allowed. The
+        peer is not checked for an allowed host: behind Docker it is the bridge
+        gateway and behind Tailscale Serve a loopback proxy, so the boundary is
+        where the port is published. A rebinding page still sends its own Host.
+        """
+        if self._local_viewer():
+            return True
+        if _hostname(self.headers.get("Host")) not in self.allowed_hosts:
+            return False
+        # Same origin means the port too: with `--allow-host localhost` behind a
+        # tunnel, another local web app on another port must not count.
+        origin = self.headers.get("Origin")
+        return (origin is None or self._allowed_origin(origin)
+                or _origin_authority(origin) == _host_authority(self.headers.get("Host")))
 
     def _allowed_origin(self, origin: str | None) -> bool:
         """Whether ``origin`` is this server's own, or one listed in ``AGENTPLAY_DEV_ORIGINS``.
@@ -283,7 +325,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - http.server naming
         # Every read is the user's own data (session titles are prompt text, maps
         # name private repos and files), so a DNS-rebinding page gets nothing.
-        if not self._from_this_machine():
+        if not self._trusted():
             return self._error(403, "forbidden", "Only the local viewer can read this.")
         url = urlsplit(self.path)
         q = parse_qs(url.query)
@@ -315,12 +357,6 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._hook_detail(q)
             if url.path == "/api/reviews":
                 return self._reviews(q)
-            if url.path == "/api/account":
-                # The email is the user's: only the viewer on this machine sees it,
-                # and only it is ever offered the card.
-                if not self._from_this_machine():
-                    return self._json({"success": True, "status": "none", "email": None, "enabled": False})
-                return self._json({"success": True, **account.public_state()})
             if url.path.startswith("/api/"):
                 return self._error(404, "not_found", "Unknown endpoint.")
             return self._static(url.path)
@@ -330,47 +366,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(500, "internal_error", "Something went wrong reading your local sessions.")
 
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
-        url = urlsplit(self.path)
-        if url.path != "/api/account":
-            return self._error(404, "not_found", "Unknown endpoint.")
-        # The only write this server takes. A browser on another site can reach
-        # 127.0.0.1, so: same machine, a local Origin and Host (no DNS rebinding),
-        # and a JSON body, which a cross-site form can't send without a preflight
-        # this server never answers.
-        if not (_is_loopback(self.client_address) and self._allowed_origin(self.headers.get("Origin"))
-                and _local_origin(self.headers.get("Host"))):
-            return self._error(403, "forbidden", "Only the local viewer can do this.")
-        if (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() != "application/json":
-            return self._error(415, "unsupported_media_type", "Send JSON.")
-        try:
-            size = int(self.headers.get("Content-Length") or 0)
-        except ValueError:
-            size = -1
-        if not 0 < size <= MAX_BODY:
-            return self._error(400, "invalid_input", "Bad request body.")
-        try:
-            body = json.loads(self.rfile.read(size))
-        except ValueError:
-            return self._error(400, "invalid_input", "Bad request body.")
-        action = body.get("action") if isinstance(body, dict) else None
-        try:
-            if action == "skip":
-                return self._json({"success": True, **account.skip()})
-            if action == "disconnect":
-                return self._json({"success": True, **account.disconnect()})
-            if action == "signup":
-                email = str(body.get("email") or "").strip()
-                if not account.valid_email(email):
-                    return self._error(400, "invalid_email", "That doesn't look like an email address.")
-                try:
-                    return self._json({"success": True, **account.sign_up(email)})
-                except (OSError, ValueError):
-                    return self._error(502, "unreachable", "We couldn't reach Entelligence. Check your connection and try again.")
-            return self._error(400, "invalid_input", "Unknown action.")
-        except BrokenPipeError:
-            return None
-        except Exception:  # noqa: BLE001 - never leak a traceback to the page
-            return self._error(500, "internal_error", "Something went wrong saving that.")
+        self._error(405, "method_not_allowed", "This server is read-only.")
 
     def _rows(self) -> list[dict[str, Any]]:
         with self.lock:
@@ -444,7 +440,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(404, "not_found", "We couldn't find that session.")
         # Task labels are prompt text and the API is unauthenticated: a network
         # client gets the stored map, which carries none.
-        if self._from_this_machine():
+        if self._trusted():
             doc = _with_task_titles(doc, self.store.index.get(sid) or {})
         self._json(doc)
 
@@ -452,10 +448,10 @@ class _Handler(BaseHTTPRequestHandler):
         """Transcript path for a session whose transcript extras may be read, else None after replying.
 
         Pasted images and hook failure details are the user's own data, so only
-        the viewer on this machine gets them. Only a Claude Code session built from a local transcript has any:
+        a trusted viewer gets them. Only a Claude Code session built from a local transcript has any:
         the path comes from the index row alone, never from the request.
         """
-        if not self._from_this_machine():
+        if not self._trusted():
             self._error(403, "forbidden", "Only the local viewer can read this.")
             return None
         if not sid:
@@ -506,9 +502,9 @@ class _Handler(BaseHTTPRequestHandler):
         self._json({"success": True, "message": message, "command": command})
 
     def _reviews(self, q: dict[str, list[str]]) -> None:
-        # Review comments are the user's PR text: the same this-machine rule as
-        # pasted images and hook details.
-        if not self._from_this_machine():
+        # Review comments are the user's PR text: the same rule as pasted images
+        # and hook details.
+        if not self._trusted():
             return self._error(403, "forbidden", "Only the local viewer can read this.")
         sid = (q.get("id") or [""])[0]
         if not sid:
@@ -516,13 +512,29 @@ class _Handler(BaseHTTPRequestHandler):
         self._json({"success": True, "reviews": review.reviews_for(self.store, sid)})
 
 
-def serve(port: int = 7317, *, store: Store | None = None, host: str = "127.0.0.1") -> ThreadingHTTPServer:
-    """Create (but do not start) the local server. Call ``serve_forever()`` on the result."""
-    handler = type("Handler", (_Handler,), {"store": store or Store(), "static": viewer_root()})
+def serve(
+    port: int = 7317,
+    *,
+    store: Store | None = None,
+    host: str = "127.0.0.1",
+    allowed_hosts: frozenset[str] = frozenset(),
+    exact_port: bool = False,
+) -> ThreadingHTTPServer:
+    """Create (but do not start) the local server. Call ``serve_forever()`` on the result.
+
+    Args:
+        allowed_hosts: lowercase hostnames (no port) whose requests are trusted
+            from any peer. Empty trusts only the viewer on this machine.
+        exact_port: raise ``OSError`` when ``port`` is taken instead of picking a
+            free one. A service must not drift to a port nothing forwards to.
+    """
+    handler = type("Handler", (_Handler,), {
+        "store": store or Store(), "static": viewer_root(), "allowed_hosts": allowed_hosts,
+    })
     try:
         return _Server((host, port), handler)
     except OSError:
-        if port == 0:
+        if port == 0 or exact_port:
             raise
         return _Server((host, 0), handler)  # port taken: pick a free one
 

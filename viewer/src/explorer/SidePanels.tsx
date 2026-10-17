@@ -77,9 +77,6 @@ const PANEL_TAB_LABEL: Record<PanelTab, string> = {
   activity: 'Activity',
   review: 'Review',
 };
-/** Review has a tab of its own because the block in Details sits under the
- * Produced list, and a session with a long list pushes it past the fold. */
-const ACCENT_TAB: PanelTab = 'review';
 
 const FEED_LEN = 14;
 /** `cat:<ToolCategory>`, one filter value per category:
@@ -189,13 +186,7 @@ export function SidePanels({
               'flex-1 rounded-md px-2 py-1 ds-text-body-xs-medium transition-colors',
               tab === t
                 ? 'bg-ds-brand-lightest text-ds-brand-default'
-                : t === ACCENT_TAB
-                  ? // Unselected but not quiet: the one tab here that is an
-                    // offer rather than a view of the session. `motion-safe`
-                    // because a loop that never ends is exactly what someone
-                    // who asked for less motion was asking to be spared.
-                    'text-ds-brand-default ring-1 ring-inset ring-ds-brand-subtler hover:bg-ds-brand-lightest motion-safe:animate-pulse-glow'
-                  : 'text-ds-text-subtle hover:text-ds-text-default'
+                : 'text-ds-text-subtle hover:text-ds-text-default'
             )}
           >
             {PANEL_TAB_LABEL[t]}
@@ -223,10 +214,15 @@ export function SidePanels({
         <div className="min-h-0 flex-1 overflow-y-auto">
           <ReviewLoopBlock
             map={map}
-            src="review-tab"
             path={reviewPath}
             onPath={onReviewPath}
             onSeek={onSeek}
+            empty={
+              <p className="ds-text-body-xs-medium text-ds-text-subtle">
+                No review comments for this session. Run{' '}
+                <code className="font-mono">agentplay review</code> on its PR to trace them here.
+              </p>
+            }
           />
         </div>
       ) : (

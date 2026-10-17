@@ -19,7 +19,7 @@ view is a shareable link.
 pnpm install
 pnpm dev             # http://localhost:5173, demo sessions
 AGENTPLAY_SERVER=http://127.0.0.1:7317 pnpm dev   # proxy /api to `agentplay view --no-open`
-                    # (start that with AGENTPLAY_DEV_ORIGINS=http://localhost:5173 so the signup card can post)
+                    # (start that with AGENTPLAY_DEV_ORIGINS=http://localhost:5173 so the server trusts the dev origin)
 pnpm test            # vitest: model and data-layer tests
 pnpm typecheck
 pnpm build           # tsc -b && vite build -> dist/

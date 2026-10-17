@@ -6,7 +6,7 @@
 uvx agentplay
 ```
 
-That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. The only network call agentplay makes on its own is an optional email signup in the viewer, described under [Privacy](#privacy); set `AGENTPLAY_NO_NETWORK=1` to switch it off. `agentplay review`, which you run yourself, can also read your PR's review comments from GitHub.
+That one command finds the agent sessions already on your machine, builds a redacted replay of each one, and opens a local viewer. No account and no API key are required, and your session data never leaves your machine. agentplay makes no network call on its own; `agentplay review`, which you run yourself, can read your PR's review comments from GitHub (see [Privacy](#privacy)).
 
 ![The session explorer replaying a Claude Code session: a radial map of every file, tool, MCP server, subagent and model the session touched, the replay timeline underneath, and details on the right](docs/images/explorer-light.png)
 
@@ -20,6 +20,7 @@ That one command finds the agent sessions already on your machine, builds a reda
 - [Install](#install)
 - [Using the viewer](#using-the-viewer)
 - [Review loop](#review-loop)
+- [Run as a service (Docker)](#run-as-a-service-docker)
 - [Supported agents](#supported-agents)
 - [Privacy](#privacy)
 - [Command reference](#command-reference)
@@ -126,7 +127,7 @@ Every view is a URL, so a link to a moment in a session reopens it for anyone wh
 ```bash
 agentplay build                                   # records edit evidence for Claude Code sessions
 agentplay review --pr acme/api#142 --repo-path ~/src/api
-agentplay view                                    # the Review tab now shows the comments, unlocked
+agentplay view                                    # the Review tab now shows the comments
 ```
 
 - **Which sessions.** By default, the sessions whose map lists the PR as one they opened. Pass `--session <id>` (repeatable) to name them, for example every session that worked on a ticket over several rework rounds.
@@ -135,6 +136,18 @@ agentplay view                                    # the Review tab now shows the
 - **What you see.** In the viewer, each comment shows the edit it was traced to and a causal path: the reads, searches and edits on that file before it, and the first test or build after it. Picking a comment lights that path on the map and moves the playhead to the edit.
 
 Only Claude Code sessions record edit evidence so far. Maps built before this release have none; rebuild them with `agentplay build --rebuild`.
+
+## Run as a service (Docker)
+
+On a Linux host you can keep the viewer running in a container and open it from your other machines over Tailscale. The container reads your home directory read-only (Claude Code's transcripts, and the repos they edited, at the same paths as on the host; narrow it with `CODE_ROOT`), writes maps to your usual `~/.agentplay`, and scans for new sessions every ten minutes.
+
+```bash
+cp .env.example .env        # set AGENTPLAY_PUBLIC_HOST, UID and GID
+docker compose up -d
+tailscale serve --bg --https=8443 http://127.0.0.1:7317
+```
+
+Then open `https://<AGENTPLAY_PUBLIC_HOST>:8443/`. The port is published on `127.0.0.1` only. The server trusts a request only when its `Host` is the name in `AGENTPLAY_PUBLIC_HOST` (any port), and refuses every other read; that is what `--allow-host` does. Through Docker even `http://127.0.0.1:7317` on the host is another peer, so open the tailnet name there too. The email signup stays off.
 
 ## Supported agents
 
@@ -156,11 +169,9 @@ Run `agentplay agents` to see which of these were found on your machine. Every l
 
 agentplay was designed so that you can show a map to someone else without worrying about what is in it.
 
-**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` and loads no remote fonts or scripts. It shows a few links to Entelligence (a banner, the welcome card, sample-review and "fix now" blocks); they open only when you click them, carry only a tag naming where you clicked (`?src=agentplay-viewer&from=banner`) and nothing from your sessions, and the viewer fetches nothing from them on its own. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
+**Your session data never leaves your machine.** There is no usage telemetry, no update check and no upload of sessions or maps. The viewer is served from `127.0.0.1` unless you pass `--host`, and loads no remote fonts or scripts. Cursor's billed-usage lookup, which would call Cursor's API with your stored token, is deliberately disabled.
 
-**The one network call agentplay makes on its own is your email, if you give it.** The first time the viewer opens, it offers to take your email so Entelligence can tell you about new features. If you type one in, agentplay sends Entelligence the event (signup, or later disconnect), that email, a random install id (generated once and kept in `~/.agentplay/account.json`, so it ties your signup and disconnect to the same install), its version number and the time, and nothing else: no session data, paths or repo names. "Continue without email" sends nothing. All of it is in one file, [`account.py`](python/src/agentplay/account.py); `grep -rn urllib.request python/src/` finds it and nothing else. You can disconnect from the top bar, which forgets the email locally and sends Entelligence one request to delete it; it is sent once and not retried, so if Entelligence can't be reached at that moment it may not arrive, and the email may stay on the list. `DO_NOT_TRACK=1` or `AGENTPLAY_NO_NETWORK=1` turns the offer off and blocks the request. Details: [docs/signup-endpoint.md](docs/signup-endpoint.md).
-
-**`agentplay review` reads from GitHub when you run it.** It is the second network path, and it is never taken implicitly: only the `review` command, run by you, uses it. Without `--comments` it runs your installed `gh` CLI to read the PR's base and head commits and its inline review comments, and if your checkout lacks the PR head it runs `git fetch origin pull/<n>/head` once. Both use your own credentials and send nothing from your sessions. With `--comments` and `--base`/`--head`, and a checkout that already has both commits, it makes no network call at all.
+**`agentplay review` reads from GitHub when you run it.** It is the only network path, and it is never taken implicitly: only the `review` command, run by you, uses it. Without `--comments` it runs your installed `gh` CLI to read the PR's base and head commits and its inline review comments, and if your checkout lacks the PR head it runs `git fetch origin pull/<n>/head` once. Both use your own credentials and send nothing from your sessions. With `--comments` and `--base`/`--head`, and a checkout that already has both commits, it makes no network call at all.
 
 **A map document never contains:**
 
@@ -185,6 +196,8 @@ Repo names and remotes are kept in every path mode, so a reader can tell which p
 **Local-only extras.** The session list shows a title for each session: Claude Code's own title, or else the first 90 characters of your first prompt. Task labels in the viewer are the start of each prompt. Both live only in `~/.agentplay/index.json`, are never written into a map, and are only served to a viewer on the same machine; turn them off with `--no-titles`, which also clears what is already stored for the sessions that run sees. The flag is per run, not a saved preference, so a later build without it puts them back. Images you pasted into Claude Code prompts are read from the original transcript on demand by the local server, for a viewer on this machine only, and are never stored in a map, the index or an export. The same goes for the message and command of a failed hook: the map keeps which hook failed and what it ran after, and the viewer reads the text from the transcript only on this machine.
 
 **Edit evidence and review docs stay local.** For each Claude Code session, `agentplay build` also writes `~/.agentplay/evidence/<map>.json`: SHA-256 hashes of the lines each edit changed, with the edit's step number and repo-relative path. A hash of a short line can be guessed back by hashing candidates, so this file is never part of a map and `export` never includes it; it is written and deleted together with its map. `agentplay review` writes `~/.agentplay/reviews/<owner>_<repo>_<n>.json`, which holds the review comments' text and authors as GitHub or your input file gave them. The local server shows it only to a viewer on this machine, and it is never written into a map or an export.
+
+**`--allow-host` shares your sessions.** The API has no login. With `--allow-host NAME`, anyone who can reach the port and sends `Host: NAME` reads everything the local viewer can: session titles, prompt text in task labels, pasted images, hook output and review comments. What this section says goes only to a viewer on this machine goes to them too. Keep the port on loopback and reach it through Tailscale Serve, which only your tailnet can use. Never expose it with Tailscale Funnel or a public port.
 
 **Sharing.** `agentplay export <session>` writes a single map file and tells you which repo names and how many paths it contains. For anything you post publicly, rebuild with `--path-mode dirs_only`.
 
@@ -211,6 +224,9 @@ agentplay agents      show which agents were found on this machine
 | `--limit N` | build, view, list | newest N sessions |
 | `--no-titles` | build, view | don't keep local titles, and clear any already stored |
 | `--port 7317`, `--no-open`, `--no-build` | view | server options |
+| `--host 0.0.0.0` | view | listen on another interface; fails instead of moving when the port is busy |
+| `--allow-host NAME` | view | trust requests with this `Host` from any peer (repeatable); see [Privacy](#privacy) |
+| `--rescan 600` | view | scan for new sessions again every N seconds (default `0`: once at start) |
 | `--json` | build, list, review | machine-readable output |
 | `--pr acme/api#142` | review | the pull request |
 | `--session <id>` | review | a session to attribute to (repeatable; default: sessions whose map lists the PR) |
@@ -279,7 +295,7 @@ The format is deliberately independent of this tool. If you build an agent, an o
 
 ## Configuration
 
-All configuration is through environment variables. The examples in this README use bash syntax; in PowerShell, set one with `$env:AGENTPLAY_NO_NETWORK = "1"` before running `agentplay` (it lasts for that session), and in cmd use `set AGENTPLAY_NO_NETWORK=1`.
+All configuration is through environment variables. The examples in this README use bash syntax; in PowerShell, set one with `$env:AGENTPLAY_HOME = "D:\agentplay"` before running `agentplay` (it lasts for that session), and in cmd use `set AGENTPLAY_HOME=D:\agentplay`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -291,10 +307,9 @@ All configuration is through environment variables. The examples in this README 
 | `AGENTPLAY_COPILOT_VSCODE_HOMES` | VS Code `User` dirs | Copilot in VS Code |
 | `AGENTPLAY_OPENCODE_HOMES` | `$XDG_DATA_HOME/opencode` | OpenCode data dirs |
 | `AGENTPLAY_KIRO_HOMES` | `~/.kiro` | Kiro homes |
+| `AGENTPLAY_REPO_ROOTS` | unset | comma-separated `<glob>=<owner/repo>` entries that map paths to a repo with no `.git` lookup, for worktrees deleted before the map is built: `/home/you/worktrees/wb-*=acme/app`. `*` matches within one path segment |
 | `AGENTPLAY_HMAC_KEY` | unset | key for `--path-mode hashed` |
-| `DO_NOT_TRACK`, `AGENTPLAY_NO_NETWORK` | unset | set either to turn off the email signup and its one network call |
-| `AGENTPLAY_SIGNUP_URL` | built in | where the signup sends an email (for testing; see [docs/signup-endpoint.md](docs/signup-endpoint.md)) |
-| `AGENTPLAY_DEV_ORIGINS` | unset | comma-separated extra origins allowed to post to the local server, for the viewer's dev server: `http://localhost:5173` |
+| `AGENTPLAY_DEV_ORIGINS` | unset | comma-separated extra origins the local server trusts, for the viewer's dev server: `http://localhost:5173` |
 | `NO_COLOR` | unset | disable terminal styling |
 
 ## Development

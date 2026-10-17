@@ -160,8 +160,15 @@ class _FakeServer:
 def test_view_says_when_the_requested_port_is_busy(monkeypatch, capsys, requested, bound, notice) -> None:
     from agentplay import server
 
-    monkeypatch.setattr(server, "serve", lambda _port: _FakeServer(bound))
+    monkeypatch.setattr(server, "serve", lambda _port, **_kw: _FakeServer(bound))
     assert cli.main(["view", "--port", str(requested), "--no-open", "--no-build"]) == 0
     out, err = capsys.readouterr()
     assert (f"Port {requested} is busy; using {bound} instead." in err) is notice
     assert f"127.0.0.1:{bound}/" in out
+
+
+def test_a_malformed_repo_roots_entry_stops_the_command_with_its_name(monkeypatch) -> None:
+    monkeypatch.setenv("AGENTPLAY_REPO_ROOTS", "/x/wb-*=widget")
+    monkeypatch.setattr(pipeline, "build_all", lambda **_: pytest.fail("built despite a bad entry"))
+    with pytest.raises(SystemExit, match=r"AGENTPLAY_REPO_ROOTS.*'/x/wb-\*=widget'"):
+        cli.main(["build"])

@@ -3,14 +3,13 @@ import { subagentOrdinal } from './sessionMapModel';
 
 /**
  * What the review block shows for the open session: its real review docs
- * when `agentplay review` wrote any, the locked sample when it has none, and
- * nothing while the answer is still on its way (so the sample never flashes
- * up in front of real comments).
+ * when `agentplay review` wrote any, `none` when it wrote none, and `pending`
+ * while the answer is still on its way.
  */
 export type ReviewLoopView =
   | { kind: 'pending' }
   | { kind: 'real'; reviews: readonly ReviewDoc[] }
-  | { kind: 'locked' };
+  | { kind: 'none' };
 
 export function reviewLoopView(query: {
   data?: readonly ReviewDoc[];
@@ -19,7 +18,7 @@ export function reviewLoopView(query: {
   if (query.data?.some((r) => r.comments.length > 0)) {
     return { kind: 'real', reviews: query.data.filter((r) => r.comments.length > 0) };
   }
-  return query.isLoading ? { kind: 'pending' } : { kind: 'locked' };
+  return query.isLoading ? { kind: 'pending' } : { kind: 'none' };
 }
 
 const UNKNOWN_LABEL: Partial<Record<string, string>> = {

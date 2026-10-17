@@ -451,6 +451,112 @@ def test_a_rebinding_page_reads_nothing(env, path):
         httpd.server_close()
 
 
+@contextlib.contextmanager
+def _remote_server(env, allowed: frozenset[str]):
+    """A server trusting ``allowed`` whose every peer looks like the Docker bridge gateway."""
+    _write_claude_session(env["home"], "dddddddd-0000-0000-0000-00000000000d", env["repo"])
+    pipeline.build_all(agents={"claude-code"}, store=Store(env["sm"]))
+    st = Store(env["sm"])
+    httpd = serve(0, store=st, host="127.0.0.1", allowed_hosts=allowed)
+    base_handler = httpd.RequestHandlerClass
+
+    class RemoteHandler(base_handler):  # type: ignore[valid-type, misc]
+        def setup(self) -> None:
+            super().setup()
+            self.client_address = ("172.17.0.1", 51000)
+
+    httpd.RequestHandlerClass = RemoteHandler
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def request(path: str, headers: dict[str, str], data: bytes | None = None) -> tuple[int, str]:
+        req = urllib.request.Request(base + path, headers=headers, data=data)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    try:
+        yield request, st.rows()[0]["sessionId"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+ALLOWED = frozenset({"allowed.example"})
+
+
+@pytest.mark.parametrize("host", ["allowed.example", "allowed.example:8443", "ALLOWED.example:443"])
+def test_an_allowed_host_reads_everything_from_any_peer(env, host):
+    with _remote_server(env, ALLOWED) as (request, sid):
+        status, body = request("/api/status", {"Host": host})
+        assert status == 200 and json.loads(body)["mapCount"] == 1
+        status, body = request("/api/sessions", {"Host": host})
+        assert status == 200 and len(json.loads(body)["sessions"]) == 1
+        status, body = request(f"/api/map-doc?id={urllib.request.quote(sid, safe='')}", {"Host": host})
+        assert status == 200 and json.loads(body)["tasks"][0]["name"] == "please fix the SECRET-PROMPT bug"
+        same_site = {"Host": host, "Origin": f"https://{host}", "Sec-Fetch-Site": "same-origin"}
+        assert request("/api/status", same_site)[0] == 200
+
+
+@pytest.mark.parametrize(("allowed", "headers"), [
+    (frozenset(), {"Host": "allowed.example"}),                     # no allowlist: today's rule
+    (frozenset(), {"Host": "127.0.0.1:7317"}),                      # a local Host from a remote peer
+    (ALLOWED, {"Host": "evil.example"}),
+    (ALLOWED, {"Host": "allowed.example.evil.test"}),
+    (ALLOWED, {"Host": "evil.allowed.example"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "https://evil.example"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "https://allowed.example.evil.test"}),
+    (ALLOWED, {"Host": "allowed.example", "Origin": "null"}),
+    (ALLOWED, {"Host": "allowed.example:7317", "Origin": "http://allowed.example:3000"}),  # another app, same name
+    (ALLOWED, {"Host": "allowed.example", "Sec-Fetch-Site": "cross-site"}),
+])
+def test_anything_else_from_a_remote_peer_reads_nothing(env, allowed, headers):
+    with _remote_server(env, allowed) as (request, sid):
+        for path in ("/api/status", "/api/sessions", f"/api/map-doc?id={urllib.request.quote(sid, safe='')}"):
+            status, body = request(path, headers)
+            assert status == 403, path
+            assert "SECRET-PROMPT" not in body
+
+
+def test_an_allowed_host_cannot_post(env):
+    with _remote_server(env, ALLOWED) as (request, _sid):
+        headers = {"Host": "allowed.example", "Origin": "http://allowed.example", "Content-Type": "application/json"}
+        status, _ = request("/api/account", headers, data=b'{"action": "skip"}')
+        assert status == 405
+    assert not (env["sm"] / "account.json").exists()
+
+
+@pytest.mark.parametrize("value", ["https://x/", "x.example/path", "x.example:8443", "", "a b"])
+def test_allow_host_takes_a_bare_hostname_only(value, capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.parser().parse_args(["view", "--allow-host", value])
+    assert e.value.code == 2
+    assert "not a hostname" in capsys.readouterr().err
+
+
+def test_allow_host_is_normalized_and_repeatable():
+    args = cli.parser().parse_args(["view", "--allow-host", "MyHost.Example.", "--allow-host", "b.example"])
+    assert args.allow_host == ["myhost.example", "b.example"]
+
+
+def test_an_explicit_host_fails_on_a_busy_port_instead_of_moving(env, capsys, monkeypatch):
+    import socket
+
+    def _stop(_self: Any) -> None:
+        raise KeyboardInterrupt  # a server that moved to another port would otherwise run forever
+
+    monkeypatch.setattr(server_mod._Server, "serve_forever", _stop)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        rv = cli.main(["view", "--host", "127.0.0.1", "--port", str(port), "--no-open", "--no-build"])
+    assert rv == 1
+    assert f"can't listen on 127.0.0.1:{port}" in capsys.readouterr().err
+
+
 def test_server_picks_up_sessions_built_while_it_runs(env):
     """`view` serves first and scans in a background thread, so a Store held for
     the server's lifetime has to notice an index written underneath it."""
