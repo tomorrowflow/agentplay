@@ -7,6 +7,7 @@ Layout (override the root with ``AGENTPLAY_HOME``)::
       maps/<key>.json         one agentplay/v1 document per session
       evidence/<key>.json     local-only edit evidence for that map (Claude Code), never exported
       reviews/<pr>.json       local-only review docs written by `agentplay review`
+      digests/factory-*.json  local-only digests written by `agentplay factory-digest`
       cache/<agent>/...       decoded transcripts for database-backed agents
 
 Builds are incremental: a session is rebuilt only when its transcript's mtime

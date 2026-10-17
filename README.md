@@ -195,7 +195,7 @@ Repo names and remotes are kept in every path mode, so a reader can tell which p
 
 **Local-only extras.** The session list shows a title for each session: Claude Code's own title, or else the first 90 characters of your first prompt. Task labels in the viewer are the start of each prompt. Both live only in `~/.agentplay/index.json`, are never written into a map, and are only served to a viewer on the same machine; turn them off with `--no-titles`, which also clears what is already stored for the sessions that run sees. The flag is per run, not a saved preference, so a later build without it puts them back. Images you pasted into Claude Code prompts are read from the original transcript on demand by the local server, for a viewer on this machine only, and are never stored in a map, the index or an export. The same goes for the message and command of a failed hook: the map keeps which hook failed and what it ran after, and the viewer reads the text from the transcript only on this machine.
 
-**Edit evidence and review docs stay local.** For each Claude Code session, `agentplay build` also writes `~/.agentplay/evidence/<map>.json`: SHA-256 hashes of the lines each edit changed, with the edit's step number and repo-relative path. A hash of a short line can be guessed back by hashing candidates, so this file is never part of a map and `export` never includes it; it is written and deleted together with its map. `agentplay review` writes `~/.agentplay/reviews/<owner>_<repo>_<n>.json`, which holds the review comments' text and authors as GitHub or your input file gave them. The local server shows it only to a viewer on this machine, and it is never written into a map or an export.
+**Edit evidence and review docs stay local.** For each Claude Code session, `agentplay build` also writes `~/.agentplay/evidence/<map>.json`: SHA-256 hashes of the lines each edit changed, with the edit's step number and repo-relative path. A hash of a short line can be guessed back by hashing candidates, so this file is never part of a map and `export` never includes it; it is written and deleted together with its map. `agentplay review` writes `~/.agentplay/reviews/<owner>_<repo>_<n>.json`, which holds the review comments' text and authors as GitHub or your input file gave them. The local server shows it only to a viewer on this machine, and it is never written into a map or an export. `agentplay factory-digest` writes `~/.agentplay/digests/factory-<date>.json` and `.md`, which hold your factory cards' titles and labels; the server does not serve them.
 
 **`--allow-host` shares your sessions.** The API has no login. With `--allow-host NAME`, anyone who can reach the port and sends `Host: NAME` reads everything the local viewer can: session titles, prompt text in task labels, pasted images, hook output and review comments. What this section says goes only to a viewer on this machine goes to them too. Keep the port on loopback and reach it through Tailscale Serve, which only your tailnet can use. Never expose it with Tailscale Funnel or a public port.
 
@@ -212,6 +212,7 @@ agentplay list        list built sessions
 agentplay export      write one session's map to a .json or .json.gz file
 agentplay import      add map files (a teammate's, another machine's) to your local store
 agentplay review      trace a PR's review comments to the session edits that wrote the lines
+agentplay factory-digest  per-card metrics for OpenClaw factory cards, joined with their session maps
 agentplay agents      show which agents were found on this machine
 ```
 
@@ -227,12 +228,15 @@ agentplay agents      show which agents were found on this machine
 | `--host 0.0.0.0` | view | listen on another interface; fails instead of moving when the port is busy |
 | `--allow-host NAME` | view | trust requests with this `Host` from any peer (repeatable); see [Privacy](#privacy) |
 | `--rescan 600` | view | scan for new sessions again every N seconds (default `0`: once at start) |
-| `--json` | build, list, review | machine-readable output |
+| `--json` | build, list, review, factory-digest | machine-readable output |
 | `--pr acme/api#142` | review | the pull request |
 | `--session <id>` | review | a session to attribute to (repeatable; default: sessions whose map lists the PR) |
 | `--repo-path <dir>` | review | a local git checkout of the PR's repository (default `.`) |
 | `--comments <file>` | review | read comments from an `agentplay-review-input/v1` file instead of GitHub |
 | `--base <sha>`, `--head <sha>` | review | the PR's base and head commits, instead of asking GitHub |
+| `--cards <file>` | factory-digest | `openclaw workboard list --json` output, or `-` for stdin |
+| `--days 7`, `--card <id>` | factory-digest | cards published in the last N days, or this card (repeatable, id prefix) |
+| `--out <dir>`, `--now <iso>` | factory-digest | output folder (default `~/.agentplay/digests`); end the window at this time |
 
 ## The session map format
 
@@ -288,6 +292,7 @@ The format is deliberately independent of this tool. If you build an agent, an o
 | `python/src/agentplay/{store,pipeline}.py` | Incremental build into `~/.agentplay` |
 | `python/src/agentplay/server.py` | Local read-only API and static viewer |
 | `python/src/agentplay/review.py` | `agentplay review`: replays local edit evidence over a PR to attribute review comments |
+| `python/src/agentplay/factory_digest.py` | `agentplay factory-digest`: per-card, per-attempt metrics for OpenClaw factory sessions |
 | `viewer/src/core/` | Pure TypeScript model: tree, radial layout, playback, signals, scopes, canvas painters. No React |
 | `viewer/src/explorer/` | The React explorer |
 | `viewer/src/data/` | `SessionMapSource` implementations: local server, dropped files, demo |

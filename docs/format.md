@@ -22,7 +22,7 @@ One map is one JSON object. Its machine-readable definition is [`schema/agentpla
 - [Outcomes](#outcomes)
 - [Content hash](#content-hash)
 - [Writing a producer](#writing-a-producer)
-- [Local-only companions](#local-only-companions): edit evidence and review docs, not part of `agentplay/v1`
+- [Local-only companions](#local-only-companions): edit evidence, review docs and factory digests, not part of `agentplay/v1`
 
 ## Redaction contract
 
@@ -231,7 +231,7 @@ To make your agent's sessions work with the viewer:
 
 ## Local-only companions
 
-The reference tool keeps two more kinds of document next to the maps. Neither is part of `agentplay/v1`: they break the redaction contract on purpose, so they stay on the machine that made them. `agentplay export` never includes them, the server shows them only to a viewer on that machine, and a map never points at them. Another producer or reader may ignore them entirely.
+The reference tool keeps three more kinds of document next to the maps. None is part of `agentplay/v1`: they break the redaction contract on purpose, so they stay on the machine that made them. `agentplay export` never includes them, the server shows them only to a viewer on that machine (factory digests not at all), and a map never points at them. Another producer or reader may ignore them entirely.
 
 ### Edit evidence
 
@@ -290,3 +290,44 @@ The reference tool keeps two more kinds of document next to the maps. Neither is
 - **`causalPath`** comes from the attributed session's map alone, so it is content-free: up to five events of the same agent that touched the edited file up to and including the edit, then the first `verify` after it. `label` is the tool and the map's path, or the shell verb.
 - **`maps`** is each session's map `contentHash` at the time of the review. A rebuild can renumber seqs, so `GET /api/reviews` adds `"stale": true` to a doc whose hash for the requested session no longer matches, and the viewer then neither lights paths nor seeks for it.
 - `body`, `author` and `url` are the comment as given. They live only in this file.
+
+### Factory digests
+
+`agentplay factory-digest` joins the maps of an OpenClaw software factory's sessions with the factory's Workboard cards (`openclaw workboard list --json`) and writes `$AGENTPLAY_HOME/digests/factory-<YYYY-MM-DD>.json`, a Markdown table beside it, and `factory-latest.json` and `.md` copies. A session belongs to a card when its transcript's project directory ends in `-wb-<cardId>`. A rerun on the same day overwrites that day's files.
+
+```jsonc
+{
+  "schema": "agentplay-factory-digest/v1",
+  "builtAt": "2026-10-17T06:00:00Z",
+  "window": { "from": "2026-10-10T06:00:00Z", "to": "2026-10-17T06:00:00Z", "days": 7 },
+  "cards": [
+    { "cardId": "3f1c…", "title": "Add the rate limiter", "labels": ["api"], "status": "review",
+      "publishedAt": "2026-10-15T11:00:00Z", "pullRequestUrl": "https://github.com/acme/api/pull/77",
+      "headCommit": "<sha>", "baseCommit": "<sha>", "reworkRound": 1,
+      "reviews": [ { "round": 1, "verdict": "rework", "decidedBy": "reviewer" } ],
+      "sessions": ["local:claude-code:5f2c…"],
+      "totals": {
+        "peakContext": 142000, "compactions": 0, "costUsd": 3.2141, "tokens": 2210400, "requests": 61, "calls": 88,
+        "errors": { "total": 3, "bySource": { "tool": 3 }, "byClass": { "exit_code": 2, "permission_denied": 1 } },
+        "retries": 1, "delays": 0, "edits": 14,
+        "verify": { "afterLastEdit": true, "verbsAfterLastEdit": ["pnpm test", "git diff"], "lastVerifyFailed": false },
+        "stops": { "permissionDenied": 1, "blocked": 0 }
+      },
+      "attempts": [
+        { "id": "a1", "status": "succeeded", "startedAt": "2026-10-15T10:00:00Z", "endedAt": "2026-10-15T10:20:00Z",
+          "error": null, "contextTokens": 98000, "transcriptOutcome": "verified", "fidelity": "ok", "metrics": { /* as totals */ } }
+      ],
+      "unattributed": null,
+      "flags": [] }
+  ],
+  "unmatchedSessions": ["local:claude-code:9a0b…"]
+}
+```
+
+- **Selection.** A card is published at its handoff's `publishedAt` when the handoff phase is `published`, otherwise at its rework's `acceptedAt`. The digest lists the cards published in the window, or the cards named with `--card`, whenever they were published.
+- **`totals`** covers every event of the card's sessions, in wall-clock order; it is null when no session was found. **`metrics`** and **`unattributed`** use the same shape. `peakContext` is the largest main-agent request (fresh input plus cache write plus cache read), as `totals.maxContext` in a map. `verify.afterLastEdit` is null when there is no edit, and `verbsAfterLastEdit` names the shell verbs of the `verify` events after it.
+- **`attempts`** are the card's own attempts. Each event goes to the latest-started attempt whose start and end (open while running) hold it, with one second of slack because the card stores whole seconds; events outside every attempt are `unattributed`. A session resumed for rework so yields two attempts. `status`, `error` and `contextTokens` are the card's; `transcriptOutcome` is the [outcome](#outcomes) of the attempt's events alone.
+- **`fidelity`** is `mismatch` when the card and the transcript disagree: an attempt the card calls `stopped` or `succeeded` whose events end `blocked`, or a `succeeded` one whose events end `interrupted`. It is `no_events` when no event falls in the attempt.
+- **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (a permission denial or block in the card's last attempt), `attempt-fidelity-mismatch` and `no-transcript`.
+- **`unmatchedSessions`** are factory sessions whose card is not in the input.
+- `title` and `labels` are the card's own text. They live only in these files.
