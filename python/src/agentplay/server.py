@@ -11,11 +11,14 @@ Binds to 127.0.0.1 only. Serves the static viewer from the package's
 ``GET /api/prompt-images?id=...``  per-turn metadata for images pasted into Claude Code prompts (this machine only)
 ``GET /api/prompt-image?id=...&turn=...&i=...``  one such image, read from the transcript on demand (this machine only)
 ``GET /api/hook-detail?id=...&uuid=...``  the message and command of one hook failure, read from the transcript on demand (this machine only)
+``GET /api/reviews?id=...``    the ``agentplay review`` docs that list this session (this machine only)
 ``POST /api/account``          ``{"action": "signup", "email": ...}``, ``{"action": "skip"}``, ``{"action": "disconnect"}``
 
 Pasted images are read from the original transcript when asked for and never
 stored in a map, the index or an export; see ``prompt_images.py``. Hook failure
-messages and commands are read the same way; see ``hook_detail.py``.
+messages and commands are read the same way; see ``hook_detail.py``. Review docs
+hold PR comment text and are local files written by ``agentplay review``; see
+``review.py``.
 
 The only write is ``~/.agentplay/account.json``, and the only thing that can leave
 the machine is an email the user typed into the signup card.
@@ -38,7 +41,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import account, hook_detail, prompt_images
+from . import account, hook_detail, prompt_images, review
 from .store import Store
 
 MAX_PAGE = 200
@@ -310,6 +313,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._prompt_image(q)
             if url.path == "/api/hook-detail":
                 return self._hook_detail(q)
+            if url.path == "/api/reviews":
+                return self._reviews(q)
             if url.path == "/api/account":
                 # The email is the user's: only the viewer on this machine sees it,
                 # and only it is ever offered the card.
@@ -499,6 +504,16 @@ class _Handler(BaseHTTPRequestHandler):
         except prompt_images.Unavailable as e:
             return self._error(e.status, e.code, e.message)
         self._json({"success": True, "message": message, "command": command})
+
+    def _reviews(self, q: dict[str, list[str]]) -> None:
+        # Review comments are the user's PR text: the same this-machine rule as
+        # pasted images and hook details.
+        if not self._from_this_machine():
+            return self._error(403, "forbidden", "Only the local viewer can read this.")
+        sid = (q.get("id") or [""])[0]
+        if not sid:
+            return self._error(400, "invalid_input", "Missing session id.")
+        self._json({"success": True, "reviews": review.reviews_for(self.store, sid)})
 
 
 def serve(port: int = 7317, *, store: Store | None = None, host: str = "127.0.0.1") -> ThreadingHTTPServer:

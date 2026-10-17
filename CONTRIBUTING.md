@@ -9,7 +9,7 @@ agentplay is maintained by Entelligence on a product roadmap. Parsers for new ag
 ## Ground rules
 
 1. **Privacy is the product.** A change must never cause a map, a log line, or the viewer to contain prompt text, model output, tool input or output, file contents, or command arguments. The full rules are in [docs/format.md](docs/format.md#redaction-contract). If you are not sure, ask in the PR.
-2. **No new network calls.** The only one is the opt-in email signup in `account.py`, and the README promises that. Session data never goes over the network, and a feature that needs the network does not belong in the core tool. `tests/test_account.py` fails if `urllib.request` appears in any other file.
+2. **No new network calls.** The only one agentplay makes on its own is the opt-in email signup in `account.py`, and the README promises that. The other is `agentplay review`, which runs the user's own `gh` and `git` only when the user runs that command. Session data never goes over the network, and a feature that needs the network does not belong in the core tool. `tests/test_account.py` fails if `urllib.request` appears in any other file.
 3. **No runtime dependencies** for the Python package. It runs on the standard library so that `uvx agentplay` starts instantly and installs cleanly everywhere. Dev and test dependencies are fine.
 4. **Keep internal references out.** `make check` runs `scripts/check_clean.py`, which rejects ticket ids, private links and credential shapes.
 

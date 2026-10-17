@@ -186,7 +186,8 @@ def build_all(
             _sync_titles(store, c, source, titles=titles)
             continue
         try:
-            doc = discover.build_map(c, source, path_mode=path_mode, hmac_key=hmac_key, version=__version__)
+            doc, evidence = discover.build_map(
+                c, source, path_mode=path_mode, hmac_key=hmac_key, version=__version__)
         except discover.SkipSession as exc:
             report.skip(str(exc))
             continue
@@ -201,7 +202,7 @@ def build_all(
         doc["session"]["id"] = c.session_id if not doc["session"].get("id") else doc["session"]["id"]
         title = discover.local_title(c, source) if titles else None
         task_titles = discover.local_task_titles(c, source) if titles else None
-        store.put(doc, _row(doc, c, title, task_titles))
+        store.put(doc, _row(doc, c, title, task_titles), evidence=evidence)
         report.built += 1
         report.by_agent[c.agent] += 1
     store.save_index()

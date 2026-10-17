@@ -1,6 +1,7 @@
 import type {
   HookDetailResponse,
   PromptImagesResponse,
+  ReviewDoc,
   SessionExplorerMapBatch,
   SessionExplorerMapMeta,
   SessionExplorerSessionsPage,
@@ -50,6 +51,12 @@ export interface SessionMapSource {
    * to the recording machine can answer, and it rejects otherwise.
    */
   hookDetail?(sessionId: string, uuid: string): Promise<HookDetailResponse>;
+  /**
+   * Optional. The `agentplay review` docs that list this session: PR review
+   * comments traced to the edit that wrote each line. Local files on the
+   * recording machine, so absent on sources that never have them (file, demo).
+   */
+  reviews?(sessionId: string): Promise<ReviewDoc[]>;
 }
 
 /** Max ids per `maps()` call. */

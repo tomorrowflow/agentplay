@@ -8,6 +8,7 @@ invented the code. Unobserved or ambiguous transformations remain unknown.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from hashlib import sha256
 import json
@@ -241,6 +242,130 @@ def inserted_hashes(edits: list[dict[str, Any]], added_file: bool) -> dict[str, 
     return inserted
 
 
+@dataclass(frozen=True)
+class HeadLine:
+    """What the replay knows about one head line.
+
+    ``writers`` are the sessions whose placed edits wrote this line or a line it
+    replaced; empty for a line carried through from the base. ``owner`` is None
+    for a base line and for a line only an ambiguous edit wrote.
+    """
+
+    owner: tuple[str, str] | None
+    writers: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Replay:
+    lines: dict[int, HeadLine]
+    removed: dict[int, tuple[str, str]]
+    unresolved: list[dict[str, str]]
+    unplaced: list[dict[str, Any]]
+
+
+def replay_owners(base: str | None, head: str | None, edits: list[dict[str, Any]]) -> Replay:
+    """Replay ordered observed edits over the PR base and map head lines to their owners.
+
+    An edit whose exact change was observed in more than one session has no
+    owner, and an edit that cannot be placed is skipped; both are reported in
+    the unresolved list. When the replay does not reproduce the head exactly,
+    only unique equal runs are mapped to head lines.
+
+    Args:
+        base: Immutable PR-base file content, or None for an absent file.
+        head: Immutable PR-head file content, or None for a deleted file.
+        edits: Chronologically ordered digests for one repository path, each
+            carrying ``session_id`` and ``event_id``.
+
+    Returns:
+        ``lines``: head line index to what the replay placed there, for every
+        head line it maps; ``removed``: base line index to the owner of the edit
+        that removed it; ``unresolved``: ``{event_id, reason}`` for every edit
+        that did not resolve to one owner; ``unplaced``: the edits it skipped.
+    """
+    original = line_fingerprints(base or "")
+    final = line_fingerprints(head or "")
+    virtual = original[:]
+    owners: list[tuple[str, str] | None] = [None] * len(virtual)
+    writers: list[frozenset[str]] = [frozenset()] * len(virtual)
+    base_indices: list[int | None] = list(range(len(original)))
+    removed_owners: dict[int, tuple[str, str]] = {}
+    unresolved: list[dict[str, str]] = []
+    unplaced: list[dict[str, Any]] = []
+    origins: dict[str, set[str]] = {}
+    for edit in edits:
+        signature = json.dumps([edit["operation"], edit["before"], edit["after"]])
+        origins.setdefault(signature, set()).add(edit["session_id"])
+    for edit in edits:
+        before, after = edit["before"], edit["after"]
+        owner = (edit["session_id"], edit["event_id"])
+        signature = json.dumps([edit["operation"], before, after])
+        sessions = frozenset(origins[signature])
+        assigned_owner = owner if len(sessions) == 1 else None
+        if assigned_owner is None:
+            unresolved.append({"event_id": owner[1], "reason": "ambiguous_source_session"})
+        operation = edit["operation"]
+        if operation in {"create", "write"}:
+            if virtual or base is not None:
+                unresolved.append({"event_id": owner[1], "reason": "missing_before_snapshot"})
+                unplaced.append(edit)
+                continue
+            virtual, owners = after[:], [assigned_owner] * len(after)
+            writers = [sessions] * len(after)
+            base_indices = [None] * len(after)
+            continue
+        if operation == "delete":
+            # A filename-only deletion provides no content evidence connecting
+            # this checkout to the PR base. Keep that attribution unknown.
+            unresolved.append({"event_id": owner[1], "reason": "missing_before_snapshot"})
+            unplaced.append(edit)
+            continue
+        position = _unique_position(virtual, before)
+        if position is None:
+            unresolved.append({"event_id": owner[1], "reason": "before_not_unique_or_missing"})
+            unplaced.append(edit)
+            continue
+        replacement: list[tuple[str, str] | None] = []
+        replacement_writers: list[frozenset[str]] = []
+        replacement_indices: list[int | None] = []
+        for tag, a, b, c, d in SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
+            if tag == "equal":
+                replacement.extend(owners[position + a : position + b])
+                replacement_writers.extend(writers[position + a : position + b])
+                replacement_indices.extend(base_indices[position + a : position + b])
+                continue
+            replacement.extend([assigned_owner] * (d - c))
+            replacement_writers.extend([sessions.union(*writers[position + a : position + b])] * (d - c))
+            replacement_indices.extend([None] * (d - c))
+            if assigned_owner is not None:
+                for index in base_indices[position + a : position + b]:
+                    if index is not None:
+                        removed_owners[index] = assigned_owner
+        virtual[position : position + len(before)] = after
+        owners[position : position + len(before)] = replacement
+        writers[position : position + len(before)] = replacement_writers
+        base_indices[position : position + len(before)] = replacement_indices
+
+    lines: dict[int, HeadLine] = {}
+    if virtual == final:
+        lines = {i: HeadLine(owners[i], writers[i]) for i in range(len(final))}
+    else:
+        # A later manual edit may move or replace lines. Only unique equal
+        # sequences are mapped; repeated boilerplate is not a tie-break.
+        for block in SequenceMatcher(None, virtual, final, autojunk=False).get_matching_blocks():
+            if not block.size:
+                continue
+            sequence = virtual[block.a : block.a + block.size]
+            if (
+                _unique_position(virtual, sequence) is None
+                or _unique_position(final, sequence) is None
+            ):
+                continue
+            for offset in range(block.size):
+                lines[block.b + offset] = HeadLine(owners[block.a + offset], writers[block.a + offset])
+    return Replay(lines, removed_owners, unresolved, unplaced)
+
+
 def attribute_file(
     base: str | None,
     head: str | None,
@@ -279,78 +404,9 @@ def attribute_file(
     """
     original = line_fingerprints(base or "")
     final = line_fingerprints(head or "")
-    virtual = original[:]
-    owners: list[tuple[str, str] | None] = [None] * len(virtual)
-    base_indices: list[int | None] = list(range(len(original)))
-    removed_owners: dict[int, tuple[str, str]] = {}
-    unresolved: list[dict[str, str]] = []
-    origins: dict[str, set[str]] = {}
-    for edit in edits:
-        signature = json.dumps([edit["operation"], edit["before"], edit["after"]])
-        origins.setdefault(signature, set()).add(edit["session_id"])
-    for edit in edits:
-        before, after = edit["before"], edit["after"]
-        owner = (edit["session_id"], edit["event_id"])
-        signature = json.dumps([edit["operation"], before, after])
-        assigned_owner = owner if len(origins[signature]) == 1 else None
-        if assigned_owner is None:
-            unresolved.append({"event_id": owner[1], "reason": "ambiguous_source_session"})
-        operation = edit["operation"]
-        if operation in {"create", "write"}:
-            if virtual or base is not None:
-                unresolved.append({"event_id": owner[1], "reason": "missing_before_snapshot"})
-                continue
-            virtual, owners = after[:], [assigned_owner] * len(after)
-            base_indices = [None] * len(after)
-            continue
-        if operation == "delete":
-            # A filename-only deletion provides no content evidence connecting
-            # this checkout to the PR base. Keep that attribution unknown.
-            unresolved.append({"event_id": owner[1], "reason": "missing_before_snapshot"})
-            continue
-        position = _unique_position(virtual, before)
-        if position is None:
-            unresolved.append({"event_id": owner[1], "reason": "before_not_unique_or_missing"})
-            continue
-        replacement: list[tuple[str, str] | None] = []
-        replacement_indices: list[int | None] = []
-        for tag, a, b, c, d in SequenceMatcher(None, before, after, autojunk=False).get_opcodes():
-            if tag == "equal":
-                replacement_indices.extend(base_indices[position + a : position + b])
-            else:
-                replacement_indices.extend([None] * (d - c))
-                if assigned_owner is not None:
-                    for index in base_indices[position + a : position + b]:
-                        if index is not None:
-                            removed_owners[index] = assigned_owner
-            replacement.extend(
-                owners[position + a : position + b]
-                if tag == "equal"
-                else [assigned_owner] * (d - c)
-            )
-        virtual[position : position + len(before)] = after
-        owners[position : position + len(before)] = replacement
-        base_indices[position : position + len(before)] = replacement_indices
-
-    surviving: dict[int, tuple[str, str]] = {}
-    if virtual == final:
-        surviving = {i: owner for i, owner in enumerate(owners) if owner is not None}
-    else:
-        # A later manual edit may move or replace lines. Only unique equal
-        # sequences retain ownership; repeated boilerplate is not a tie-break.
-        for block in SequenceMatcher(None, virtual, final, autojunk=False).get_matching_blocks():
-            if not block.size:
-                continue
-            sequence = virtual[block.a : block.a + block.size]
-            if (
-                _unique_position(virtual, sequence) is None
-                or _unique_position(final, sequence) is None
-            ):
-                continue
-            for offset in range(block.size):
-                owner = owners[block.a + offset]
-                if owner is not None:
-                    surviving[block.b + offset] = owner
+    replay = replay_owners(base, head, edits)
+    surviving = {i: line.owner for i, line in replay.lines.items() if line.owner is not None}
+    removed_owners, unresolved = replay.removed, replay.unresolved
     added: set[int] = set()
     deleted_indices: set[int] = set()
     for tag, a, b, c, d in SequenceMatcher(None, original, final, autojunk=False).get_opcodes():

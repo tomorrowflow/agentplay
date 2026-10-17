@@ -214,3 +214,24 @@ export function useHookDetail(sessionId: string, uuid: string | undefined) {
     staleTime: Infinity,
   });
 }
+
+export const sessionReviewsKey = (sourceId: string, sessionId: string) =>
+  ['sessionReviews', sourceId, sessionId] as const;
+
+/**
+ * The review docs that list this session. Idle on a source that has none
+ * (file, demo). No retry: a refusal from another machine is a settled
+ * answer. Kept fresh for a minute, since rerunning `agentplay review`
+ * rewrites a doc in place.
+ */
+export function useSessionReviews(sessionId: string) {
+  const source = useSessionMapSource();
+  const reviews = source.reviews?.bind(source);
+  return useQuery({
+    queryKey: sessionReviewsKey(source.id, sessionId),
+    queryFn: () => reviews!(sessionId),
+    enabled: !!reviews,
+    retry: false,
+    staleTime: 60 * 1000,
+  });
+}

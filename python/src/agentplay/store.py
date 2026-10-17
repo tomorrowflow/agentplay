@@ -5,6 +5,8 @@ Layout (override the root with ``AGENTPLAY_HOME``)::
     ~/.agentplay/
       index.json              session_id -> index row (summary, hash, source mtime)
       maps/<key>.json         one agentplay/v1 document per session
+      evidence/<key>.json     local-only edit evidence for that map (Claude Code), never exported
+      reviews/<pr>.json       local-only review docs written by `agentplay review`
       cache/<agent>/...       decoded transcripts for database-backed agents
 
 Builds are incremental: a session is rebuilt only when its transcript's mtime
@@ -62,6 +64,7 @@ class Store:
     def __init__(self, base: Path | None = None) -> None:
         self.base = base or root()
         self.maps_dir = self.base / "maps"
+        self.evidence_dir = self.base / "evidence"
         self.index_path = self.base / "index.json"
         self._index: dict[str, dict[str, Any]] | None = None
         self._index_stamp: tuple[int, int] | None = None
@@ -134,22 +137,38 @@ class Store:
         return (self.maps_dir / f"{row['key']}.json").is_file()
 
     # ------------------------------------------------------------------ maps
-    def put(self, doc: dict[str, Any], row: dict[str, Any]) -> None:
-        """Store one map document and its index row."""
+    def put(self, doc: dict[str, Any], row: dict[str, Any], *, evidence: dict[str, Any] | None = None) -> None:
+        """Store one map document, its index row and its local-only edit evidence.
+
+        The evidence file is written or removed together with the map, so a
+        rebuild or an import never leaves one behind that cites another map's seqs.
+        """
         sid = doc["session"]["id"]
         key = map_key(sid)
         _atomic_write(self.maps_dir / f"{key}.json", _canonical(doc))
+        evidence_path = self.evidence_dir / f"{key}.json"
+        if evidence is None:
+            evidence_path.unlink(missing_ok=True)
+        else:
+            _atomic_write(evidence_path, _canonical({**evidence, "sessionId": sid}))
         self.index[sid] = {**row, "key": key}
 
     def get(self, session_id: str) -> dict[str, Any] | None:
+        return self._read(self.maps_dir, session_id)
+
+    def evidence(self, session_id: str) -> dict[str, Any] | None:
+        """The session's ``agentplay-evidence/v1`` document, or None when it has none."""
+        return self._read(self.evidence_dir, session_id)
+
+    def _read(self, folder: Path, session_id: str) -> dict[str, Any] | None:
         row = self.index.get(session_id)
         key = row.get("key") if row else None
         if not isinstance(key, str) or not _KEY_RE.fullmatch(key):
             return None
         try:
-            maps = self.maps_dir.resolve()
-            target = (maps / f"{key}.json").resolve()
-            if not target.is_relative_to(maps):  # e.g. a symlink planted in maps/
+            base = folder.resolve()
+            target = (base / f"{key}.json").resolve()
+            if not target.is_relative_to(base):  # e.g. a symlink planted in maps/
                 return None
             return json.loads(target.read_text(encoding="utf-8"))
         except (OSError, ValueError):

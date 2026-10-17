@@ -1,6 +1,9 @@
 import {
+  reviewDocSchema,
+  reviewsResponseSchema,
   sessionExplorerSessionSchema,
   sessionMapSchema,
+  type ReviewDoc,
   type SessionExplorerSession,
   type SessionMap,
 } from '@/core/schema';
@@ -55,6 +58,19 @@ export function parseMapJson(json: unknown): SessionMap {
     );
   }
   return parsed.data;
+}
+
+/**
+ * The review docs in a `GET /api/reviews` answer. Each is parsed on its own,
+ * and one that does not parse is dropped rather than failing the rest: a
+ * review doc is a local file, and a stale or hand-edited one must not hide
+ * the others.
+ */
+export function parseReviews(json: unknown): ReviewDoc[] {
+  return reviewsResponseSchema.parse(json).reviews.flatMap((raw) => {
+    const parsed = reviewDocSchema.safeParse(raw);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 /** A cheap, stable content hash (FNV-1a, 32 bit) for cache keys. */
