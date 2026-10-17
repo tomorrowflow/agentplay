@@ -182,7 +182,7 @@ Every event has these fields:
 | `skill_write` | `name`, `action` (`create` or `update`) |
 | `model_switch` | `from`, `to` |
 
-`verify` is a shell command recognised as a test, build, lint or type check (for example `pytest`, `pnpm test`, `tsc`, `cargo clippy`). Output kinds such as `commit` and `pr_merge` are emitted only when confirmed in a tool result.
+`verify` is a shell command recognised as a test, build, lint or type check (for example `pytest`, `pnpm test`, `tsc`, `cargo clippy`, `git diff --check`). Output kinds such as `commit` and `pr_merge` are emitted only when confirmed in a tool result.
 
 ### Targets
 

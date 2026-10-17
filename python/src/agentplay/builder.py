@@ -60,7 +60,7 @@ WEB_TOOLS = {"WebFetch", "WebSearch", "web_search"}
 _VERIFY_RE = re.compile(
     r"\b(pytest|go test|go vet|npm (?:run )?(?:test|build|lint)|pnpm (?:run )?(?:test|check|lint)"
     r"|yarn (?:test|build)|tsc\b|ruff|mypy|make (?:test|check)|cargo (?:test|clippy|check)"
-    r"|vitest|jest|just test)"
+    r"|vitest|jest|just test|git (?:-C \S+ )?diff(?: \S+)* --check\b)"
 )
 _SEARCH_VERBS = {"grep", "rg", "find", "ls", "tree", "fd", "ag"}
 _READ_VERBS = {"cat", "sed", "head", "tail", "less", "wc", "jq", "nl", "bat"}
