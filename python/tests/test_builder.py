@@ -568,6 +568,17 @@ def test_classify_tool_error(text, cls, code):
         ("cd /x && FOO=1 npm test", "verify"),
         ("timeout 300 cargo test", "verify"),
         ("uvx ruff check src", "verify"),
+        ("git diff --check", "verify"),
+        ("git diff origin/main...HEAD --check", "verify"),
+        ("git -C /x diff --stat --check", "verify"),
+        ("git --no-pager diff --check", "verify"),
+        ("git --no-pager diff origin/main...HEAD --check", "verify"),
+        ("git -C /x --no-pager diff --check", "verify"),
+        ("git --no-pager -C /x diff --stat --check", "verify"),
+        ("git diff --checkout", "exec"),
+        ("git --no-pager diff --checkout", "exec"),
+        ("git diff --stat", "exec"),
+        ('git commit -m "git diff --check"', "exec"),
         ("echo pytest", "exec"),
         ('git commit -m "run pytest; ruff"', "exec"),
         ("git commit -m 'fix pytest'", "exec"),
@@ -576,6 +587,11 @@ def test_classify_tool_error(text, cls, code):
 )
 def test_verify_only_matches_the_command_word(cmd, kind):
     assert sm.classify("Bash", {"command": cmd}, None)[0] == kind
+
+
+def test_git_diff_check_is_a_verify_with_the_git_diff_verb():
+    kind, _, _, verb = sm.classify("Bash", {"command": "git diff --check origin/main...HEAD"}, None)
+    assert (kind, verb) == ("verify", "git diff")
 
 
 def test_repo_dot_claude_stays_repo_relative(tmp_path, fake_home):

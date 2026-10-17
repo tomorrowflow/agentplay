@@ -1,4 +1,4 @@
-"""Command line: ``agentplay [view|build|list|export|import|review|agents]``.
+"""Command line: ``agentplay [view|build|list|export|import|review|factory-digest|agents]``.
 
 Run with no arguments to build maps for your sessions and open the viewer.
 """
@@ -399,6 +399,51 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_factory_digest(args: argparse.Namespace) -> int:
+    from . import factory_digest as fd
+
+    st = Store()
+    try:
+        if args.days < 1:
+            raise fd.DigestError("--days must be 1 or more")
+        try:
+            now = datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now else datetime.now(UTC)
+        except ValueError:
+            raise fd.DigestError(f"can't read --now {args.now!r}; use an ISO time like 2026-10-17T06:00:00Z") from None
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        cards = fd.load_cards(args.cards, sys.stdin)
+        doc = fd.build_digest(cards, fd.load_sessions(st), now_ms=int(now.timestamp() * 1000),
+                              days=args.days, prefixes=args.card or [])
+        out_dir = Path(args.out) if args.out else (None if args.card else st.base / "digests")
+        out = fd.save_digest(out_dir, doc, picked=bool(args.card)) if out_dir else None
+    except fd.DigestError as exc:
+        print(f"agentplay: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"agentplay: can't write the digest: {exc}", file=sys.stderr)
+        return 1
+    if args.card:
+        if out:
+            print(f"Wrote {out} and {out.with_suffix('.md').name}.", file=sys.stderr)
+        if args.json:
+            print(json.dumps(doc, indent=2, ensure_ascii=False))
+        else:
+            print(fd.render_markdown(doc), end="")
+        return 0
+    if args.json:
+        print(json.dumps(doc, indent=2, ensure_ascii=False))
+        return 0
+    flagged = sum(1 for c in doc["cards"] if c["flags"])
+    window = doc["window"]
+    print(f"{_b(str(len(doc['cards'])) + ' cards')} (window {window['from'][:10]} to "
+          f"{window['to'][:10]}), {flagged} flagged.")
+    if doc["unmatchedSessions"]:
+        print(f"  {len(doc['unmatchedSessions'])} factory sessions belong to cards not in the input.")
+    print(f"Wrote {out} and {out.with_suffix('.md').name}. They hold card titles and stay on this machine.")
+    return 0
+
+
 def cmd_agents(_args: argparse.Namespace) -> int:
     homes = discover.Homes.default()
     present = homes.present()
@@ -477,6 +522,19 @@ def parser() -> argparse.ArgumentParser:
     rv.add_argument("--head", help="PR head commit (with --base)")
     rv.add_argument("--json", action="store_true", help="print the review document")
     rv.set_defaults(fn=cmd_review)
+
+    fdg = sub.add_parser("factory-digest", parents=[common],
+                         help="per-card metrics for OpenClaw factory cards, joined with their session maps")
+    fdg.add_argument("--cards", required=True, metavar="PATH",
+                     help="`openclaw workboard list --json` (or `show --json`) output; - reads stdin")
+    fdg.add_argument("--days", type=int, default=7, help="cards published in the last N days (default 7)")
+    fdg.add_argument("--card", action="append", metavar="ID",
+                     help="this card (an id or a unique prefix), whenever it was published; repeatable. "
+                          "Prints the digest and writes files only with --out")
+    fdg.add_argument("--out", metavar="DIR", help="output folder (default: $AGENTPLAY_HOME/digests)")
+    fdg.add_argument("--now", metavar="ISO", help="end the window at this time instead of now")
+    fdg.add_argument("--json", action="store_true", help="print the digest document")
+    fdg.set_defaults(fn=cmd_factory_digest)
 
     a = sub.add_parser("agents", parents=[common], help="show which agents were found on this machine")
     a.set_defaults(fn=cmd_agents)
