@@ -241,41 +241,27 @@ def inserted_hashes(edits: list[dict[str, Any]], added_file: bool) -> dict[str, 
     return inserted
 
 
-def attribute_file(
-    base: str | None,
-    head: str | None,
-    edits: list[dict[str, Any]],
-    *,
-    exact_sessions: frozenset[str] = frozenset(),
-) -> dict[str, Any]:
-    """Replay ordered observed edits and count ownership surviving at the PR head.
+def replay_owners(
+    base: str | None, head: str | None, edits: list[dict[str, Any]]
+) -> tuple[dict[int, tuple[str, str]], dict[int, tuple[str, str]], list[dict[str, str]]]:
+    """Replay ordered observed edits over the PR base and map head lines to their owners.
 
-    Each surviving added line is ``exclusive`` to its replay owner unless
-    another session also inserted that line's digest on this path, which makes
-    it ``shared`` (best-of-N attempts and parallel branches). When exactly one of
-    the claiming sessions has an exact commit link to the PR and it is the owner,
-    the line stays exclusive. A surviving deletion of a base line is credited to
-    its owner in ``agent_deleted_lines``/``deletion_sessions`` and
-    ``session_events`` but never counts as exclusive or shared: removing lines
-    alone must not make a link strong.
+    An edit whose exact change was observed in more than one session has no
+    owner, and an edit that cannot be placed is skipped; both are reported in
+    the unresolved list. When the replay does not reproduce the head exactly,
+    only unique equal runs keep their owners.
 
     Args:
         base: Immutable PR-base file content, or None for an absent file.
         head: Immutable PR-head file content, or None for a deleted file.
-        edits: Chronologically ordered digests for this exact repository/path,
-            each carrying session_id and event_id (and ``completed_at`` when
-            known). Callers enforce clocks and repository identity before
-            passing evidence.
-        exact_sessions: Sessions with an exact commit link to this PR; used only
-            to break ties on shared lines.
+        edits: Chronologically ordered digests for one repository path, each
+            carrying ``session_id`` and ``event_id``.
 
     Returns:
-        Added-line denominator, observed agent lines per session, unknown lines,
-        matched event identities and unresolved-edit reasons, plus per session
-        ``exclusive_lines``/``shared_lines`` counts and ``session_events``
-        (``{session_id: {event_id: completed_at or None}}`` for every event that
-        owns a credited line). No cost allocation or human-authored
-        classification is inferred.
+        ``(surviving, removed, unresolved)``: head line index to its
+        ``(session_id, event_id)`` owner, base line index to the owner of the
+        edit that removed it, and ``{event_id, reason}`` for every edit that
+        did not resolve to one owner.
     """
     original = line_fingerprints(base or "")
     final = line_fingerprints(head or "")
@@ -351,6 +337,48 @@ def attribute_file(
                 owner = owners[block.a + offset]
                 if owner is not None:
                     surviving[block.b + offset] = owner
+    return surviving, removed_owners, unresolved
+
+
+def attribute_file(
+    base: str | None,
+    head: str | None,
+    edits: list[dict[str, Any]],
+    *,
+    exact_sessions: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Replay ordered observed edits and count ownership surviving at the PR head.
+
+    Each surviving added line is ``exclusive`` to its replay owner unless
+    another session also inserted that line's digest on this path, which makes
+    it ``shared`` (best-of-N attempts and parallel branches). When exactly one of
+    the claiming sessions has an exact commit link to the PR and it is the owner,
+    the line stays exclusive. A surviving deletion of a base line is credited to
+    its owner in ``agent_deleted_lines``/``deletion_sessions`` and
+    ``session_events`` but never counts as exclusive or shared: removing lines
+    alone must not make a link strong.
+
+    Args:
+        base: Immutable PR-base file content, or None for an absent file.
+        head: Immutable PR-head file content, or None for a deleted file.
+        edits: Chronologically ordered digests for this exact repository/path,
+            each carrying session_id and event_id (and ``completed_at`` when
+            known). Callers enforce clocks and repository identity before
+            passing evidence.
+        exact_sessions: Sessions with an exact commit link to this PR; used only
+            to break ties on shared lines.
+
+    Returns:
+        Added-line denominator, observed agent lines per session, unknown lines,
+        matched event identities and unresolved-edit reasons, plus per session
+        ``exclusive_lines``/``shared_lines`` counts and ``session_events``
+        (``{session_id: {event_id: completed_at or None}}`` for every event that
+        owns a credited line). No cost allocation or human-authored
+        classification is inferred.
+    """
+    original = line_fingerprints(base or "")
+    final = line_fingerprints(head or "")
+    surviving, removed_owners, unresolved = replay_owners(base, head, edits)
     added: set[int] = set()
     deleted_indices: set[int] = set()
     for tag, a, b, c, d in SequenceMatcher(None, original, final, autojunk=False).get_opcodes():
