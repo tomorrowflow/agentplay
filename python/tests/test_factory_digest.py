@@ -58,7 +58,7 @@ def _write_session(home: Path, project: str, stem: str, steps: list[Step]) -> No
         failed = what == "deny" or what.endswith("--fail")
         out = "Permission denied: the user doesn't want to proceed" if what == "deny" else "ok"
         lines.append(rec(when, type="assistant", message={
-            "id": f"m{i}", "model": "claude-sonnet-4-5", "role": "assistant",
+            "id": f"m{i}", "model": "claude-sonnet-5-5", "role": "assistant",
             "usage": {"input_tokens": tokens, "output_tokens": 5},
             "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}))
         lines.append(rec(when + timedelta(seconds=1), type="user", message={"role": "user", "content": [
@@ -432,3 +432,10 @@ def test_cli_reports_a_malformed_cards_file(env, capsys):
     assert cli.main(["factory-digest", "--cards", str(bad), "--now", _iso(NOW)]) == 1
     assert "has no id" in capsys.readouterr().err
     assert not (env["sm"] / "digests").exists()
+
+
+def test_the_factory_model_is_priced(env):
+    st = env["build"]({_stem(1): (_wb(CARD_A), [(_at(10, 1), "edit", 1_000_000)])})
+    doc = _digest(st, [_card(CARD_A, "priced", [], published=_at(11, 0))])
+    # 1M input tokens at Sonnet 5.5's $2/MTok, plus 5 output tokens
+    assert _by_id(doc)[CARD_A]["totals"]["costUsd"] == pytest.approx(2.0, abs=0.001)

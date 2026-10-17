@@ -98,6 +98,8 @@ MODEL_RATES: dict[str, dict[str, float] | None] = {
     # Verified 2026-09-11: the planned September increase was cancelled.
     # https://platform.claude.com/docs/en/about-claude/pricing
     "claude-sonnet-5": {"input": 2.0, "output": 10.0},
+    # Claude API model table, 2026-10-06: $2/$10, cache reads $0.20 (default 0.1x).
+    "claude-sonnet-5-5": {"input": 2.0, "output": 10.0},
     "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
     "claude-sonnet-4-5": {"input": 3.0, "output": 15.0},
     "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},
