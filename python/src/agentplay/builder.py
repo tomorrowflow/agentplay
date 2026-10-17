@@ -38,11 +38,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from ._core.claude_edit_evidence import call_edit_evidence, result_patches
 from ._util import captured
 
 SCHEMA = "agentplay/v1"
 LEGACY_SCHEMA = "entelligence.session-map/v1"  # accepted by readers; same document shape
 SCHEMA_VERSION = 1
+# The local-only edit evidence stored beside a Claude Code map; not part of agentplay/v1.
+EVIDENCE_SCHEMA = "agentplay-evidence/v1"
 MAX_EVENTS = 20_000  # hard cap per map; beyond it the map is truncated and flagged
 ROLE_READ_MAX_BYTES = 64 * 1024 * 1024
 PATH_MODES = ("relative", "dirs_only", "hashed")
@@ -1582,6 +1585,9 @@ class MapBuilder:
         # and the CLI's own task segmentation for this session, when it has any.
         self.default_model: str = ""
         self.task_specs: list[dict[str, Any]] | None = None
+        # Line-hash edit evidence, one entry per observed edit, keyed to map seqs in
+        # finish(). Local-only: never part of the map (see EVIDENCE_SCHEMA).
+        self.evidence: list[dict[str, Any]] = []
 
     # -- paths
     def _seg(self, s: str) -> str:
@@ -1974,6 +1980,8 @@ class MapBuilder:
             e["t"] = int((ts - t0) * 1000) if (ts is not None and t0 is not None) else last_t
             last_t = e["t"]
             e["seq"] = i
+            for edit in e.pop("_edits", ()):
+                self.evidence.append({"seq": i, "agent": e["agent"], **edit})
             for tg in e.get("targets", []):
                 key = tg.pop("_key", None)
                 if key:
@@ -2313,6 +2321,8 @@ def _read_claude_transcript(
     msgs: dict[str, dict[str, Any]] = {}
     pending: dict[str, dict[str, Any]] = {}
     tool_events: dict[str, dict[str, Any]] = {}  # tool_use id -> event; hook errors link back to it
+    edit_calls: dict[str, tuple[str, Any, dict[str, Any]]] = {}  # tool_use id -> (tool, input, event)
+    edit_results: list[dict[str, Any]] = []  # the records carrying their results, for result_patches
     ready_ts: float | None = None  # when the agent last had new input (user turn / tool result)
     last_text = ""  # last assistant text block; only its length feeds classify_outcome, never stored
     with path.open(encoding="utf-8", errors="replace") as fh:
@@ -2407,6 +2417,10 @@ def _read_claude_transcript(
                         )
                         ready_ts = ts
                 if isinstance(content, list):
+                    if any(
+                        isinstance(x, dict) and x.get("tool_use_id") in edit_calls for x in content
+                    ):
+                        edit_results.append(d)
                     for x in content:
                         if not isinstance(x, dict) or x.get("type") != "tool_result":
                             continue
@@ -2526,6 +2540,8 @@ def _read_claude_transcript(
                     if c.get("id"):
                         pending[c["id"]] = ev
                         tool_events[c["id"]] = ev
+                        if ev["tool"] in EDIT_TOOLS:
+                            edit_calls[c["id"]] = (ev["tool"], c.get("input"), ev)
     for m in msgs.values():
         if not m["usage"]:
             continue
@@ -2543,12 +2559,47 @@ def _read_claude_transcript(
             },
         )
     b.last_agent_text[agent_id] = last_text
+    _attach_edit_evidence(edit_calls, edit_results, pending)
     for ev in pending.values():  # tool calls that never got a result (killed, interrupted, crash)
         ev["err"] = True
         ev.setdefault("errClass", "no_result")
         ev.pop("_prIntent", None)
         if (ev.get("vcs") or {}).get("action") == "pr_create":
             ev["vcs"]["action"] = "pr_create_failed"
+
+
+def _attach_edit_evidence(
+    calls: dict[str, tuple[str, Any, dict[str, Any]]],
+    results: list[dict[str, Any]],
+    unanswered: dict[str, dict[str, Any]],
+) -> None:
+    """Stash each successful edit call's line-hash evidence on its event as ``_edits``.
+
+    Paths come from the event's own target, so the evidence names the same repo
+    and repo-relative path as the map (unredacted, whatever the path mode). An
+    edit outside any repository keeps ``path`` and ``repo`` null.
+    """
+    natives = result_patches(results)
+    for call_id, (tool, inp, ev) in calls.items():
+        if call_id in unanswered:
+            continue
+        evidence = call_edit_evidence(
+            tool, inp, natives.get(call_id), has_native=call_id in natives, successful=not ev["err"]
+        )
+        if evidence["status"] != "captured":
+            continue
+        keys = [t["_key"] for t in ev.get("targets", ()) if t.get("_key") and t["touch"] == "edit"]
+        repo, path = keys[0].split(":", 1) if len(keys) == 1 else (None, None)
+        ev["_edits"] = [
+            {
+                "path": path,
+                "repo": repo,
+                "operation": e["operation"],
+                "before": e["before"],
+                "after": e["after"],
+            }
+            for e in evidence["edits"]
+        ]
 
 
 def build_claude_code_map(
@@ -2561,6 +2612,32 @@ def build_claude_code_map(
     tasks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a map for one Claude Code session file (plus its subagent transcripts)."""
+    return build_claude_code(
+        transcript,
+        path_mode=path_mode,
+        hmac_key=hmac_key,
+        cli_version=cli_version,
+        resolver=resolver,
+        tasks=tasks,
+    )[0]
+
+
+def build_claude_code(
+    transcript: Path,
+    *,
+    path_mode: str = "relative",
+    hmac_key: bytes | None = None,
+    cli_version: str = "",
+    resolver: RepoResolver | None = None,
+    tasks: list[dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Build one Claude Code session's map and its local-only edit evidence.
+
+    Returns:
+        ``(map, evidence)``. The evidence document (``agentplay-evidence/v1``)
+        holds line hashes, which a short line can be guessed back from, so it is
+        stored beside the map on this machine and never written into one.
+    """
     transcript = Path(transcript)
     b = MapBuilder(path_mode=path_mode, hmac_key=hmac_key, resolver=resolver)
     b.task_specs = tasks
@@ -2611,7 +2688,7 @@ def build_claude_code_map(
         launch = next((e for e in doc["events"] if e.get("child") == a["id"]), None)
         if launch is not None:
             a["launchSeq"] = launch["seq"]
-    return doc
+    return doc, {"schema": EVIDENCE_SCHEMA, "sessionId": doc["session"]["id"], "edits": b.evidence}
 
 
 def _claude_role(transcript: Path) -> str | None:

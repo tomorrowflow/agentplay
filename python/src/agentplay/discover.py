@@ -244,12 +244,14 @@ class SkipSession(Exception):
 
 
 def build_map(c: Candidate, source: Any, *, path_mode: str = "relative",
-              hmac_key: bytes | None = None, version: str = "") -> dict[str, Any]:
-    """Build the ``agentplay/v1`` document for one candidate.
+              hmac_key: bytes | None = None,
+              version: str = "") -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Build the ``agentplay/v1`` document for one candidate, and its edit evidence.
 
     Claude Code is read straight from its JSONL (the only way to see subagent
-    tool calls and per-request tokens). Every other agent goes through the
-    shared parser's spans.
+    tool calls and per-request tokens), and is the only agent with local-only
+    edit evidence so far; every other agent goes through the shared parser's
+    spans and returns None for it.
 
     Raises:
         SkipSession: the transcript is too large or has no parseable spans.
@@ -257,7 +259,7 @@ def build_map(c: Candidate, source: Any, *, path_mode: str = "relative",
     if source_bytes(c) > MAX_SOURCE_BYTES:
         raise SkipSession("too_large")
     if c.agent == "claude-code" and c.path.endswith(".jsonl"):
-        return builder.build_claude_code_map(
+        return builder.build_claude_code(
             Path(c.path), path_mode=path_mode, hmac_key=hmac_key, cli_version=version
         )
     spans = source.get_spans_by_session(c.session_id)
@@ -271,7 +273,7 @@ def build_map(c: Candidate, source: Any, *, path_mode: str = "relative",
         hmac_key=hmac_key,
         cli_version=version,
         started_at_hint=c.mtime or None,
-    )
+    ), None
 
 
 # --------------------------------------------------------------------- titles
