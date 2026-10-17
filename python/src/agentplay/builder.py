@@ -1618,6 +1618,12 @@ class MapBuilder:
             return {"scope": "outside", "label": _outside_bucket(abspath), "touch": touch}
         root, name, slug = found
         rel = os.path.relpath(abspath, root)
+        parts = rel.split(os.sep)
+        # A Claude Code worktree of this repo. Once it is removed, the nearest
+        # `.git` is the main checkout's, which would prefix every path with it.
+        if parts[:2] == [".claude", "worktrees"] and len(parts) > 3:
+            root = os.path.join(root, *parts[:3])
+            rel = os.path.join(*parts[3:])
         if rel in (".", "") or rel.startswith("..") or rel.split(os.sep)[0] == ".git":
             return None
         rel = rel.replace(os.sep, "/")
