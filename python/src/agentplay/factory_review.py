@@ -13,8 +13,8 @@ map, traces two kinds of comment to the edits that wrote the lines:
 
 A rework round resumes the same session, so a later round can rewrite the line
 an earlier finding names. Each comment is therefore pinned to the round it was
-written against: ``commit`` is that round's final commit and ``until`` the time
-its work came back to the board, so the replay stops before the next round.
+written against: ``commit`` is that round's final commit and ``until`` a time
+after its edits and before the next round's, so the replay stops there.
 """
 
 from __future__ import annotations
@@ -75,12 +75,16 @@ def _comment_round(rounds: tuple[Round, ...], c: CardComment) -> Round | None:
 def card_comments(card: Card, url: str) -> list[dict[str, Any]]:
     """Open findings and comment mentions, each pinned to the commit and time of its round."""
     def pinned(r: Round, cid: str, path: str, line: int, body: str, author: str | None, source: str) -> dict[str, Any]:
+        # publishedAt, not importedAt: the import lands seconds after the round's last edit, so clock skew
+        # between the node and the gateway can put real edits past it. The publish is later still, and the
+        # next round's rework only starts after it.
+        until = r.published_at if r.published_at is not None else r.imported_at
         return {"id": cid, "url": url, "author": author, "source": source, "path": path, "line": line,
-                "body": body, "commit": r.commit, "until": iso(r.imported_at)}
+                "body": body, "commit": r.commit, **({"until": iso(until)} if until is not None else {})}
 
     out = []
     for r in card.rounds:
-        if r.commit and r.imported_at is not None:
+        if r.commit:
             out += [
                 pinned(r, f"{card.id[:8]}-r{r.number}-f{i}", f.path, f.line,
                        f"[{f.rule}] {f.body}" if f.rule else f.body, "inner-reviewer", "factory-review")

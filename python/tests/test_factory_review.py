@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ SID = f"local:claude-code:{STEM}"
 BASE, ROUND0, ROUND1 = ("def f():\n    return 0\n", "def f():\n    return 1\n", "def f():\n    return 2\n")
 EDIT0, EDIT1 = datetime(2026, 9, 10, 1, 0, 10, tzinfo=UTC), datetime(2026, 9, 10, 1, 10, 10, tzinfo=UTC)
 IMPORTED0, IMPORTED1 = datetime(2026, 9, 10, 1, 5, tzinfo=UTC), datetime(2026, 9, 10, 1, 20, tzinfo=UTC)
+PUBLISHED0 = datetime(2026, 9, 10, 1, 5, 30, tzinfo=UTC)
 
 
 def _ms(dt: datetime) -> int:
@@ -107,7 +108,7 @@ def _card(env: dict[str, Any], items0: list[dict[str, Any]], comments: list[dict
         "rounds": [{"round": 0, "changes": {"to": commit0 or env["c0"]}, "review": {"items": items0}},
                    {"round": 1, "changes": {"to": env["c1"]}}],
         "reviews": [{"round": 0, "verdict": "rework", "importedAt": _ms(IMPORTED0),
-                     "publishedAt": _ms(IMPORTED0) + 30_000},
+                     "publishedAt": _ms(PUBLISHED0)},
                     {"round": 1, "verdict": "accept", "importedAt": _ms(IMPORTED1),
                      "publishedAt": _ms(IMPORTED1) + 1000}],
     }
@@ -141,7 +142,7 @@ def test_a_round_zero_finding_traces_to_the_round_zero_edit_after_round_one_rewr
     edit0, _ = _seqs()
     doc = _doc(env)
     assert doc["pr"]["head"] == env["c1"] and doc["sessions"] == [SID]
-    pin = {"commit": env["c0"], "until": _iso(IMPORTED0)}
+    pin = {"commit": env["c0"], "until": _iso(PUBLISHED0)}
     assert [{k: c[k] for k in ("id", "source", "author", "body", "commit", "until")} for c in doc["comments"]] == [
         {"id": "aaaaaaaa-r0-f0", "source": "factory-review", "author": "inner-reviewer",
          "body": "[no-magic] magic number", **pin},
@@ -161,6 +162,30 @@ def test_without_the_round_pin_the_same_line_is_lost_or_blamed_on_the_later_roun
                               comments=variants)
     got = [c["attribution"].get("seq", c["attribution"].get("reason")) for c in doc["comments"]]
     assert got == [edit1, "not_observed", edit0]
+
+
+def test_a_round_with_no_import_time_is_pinned_to_its_publish_and_does_not_crash_the_run(env, capsys, monkeypatch):
+    card = _card(env, [_finding(2)], [{"id": "k1", "body": "see src/app.py:2", "createdAt": _ms(PUBLISHED0) + 1000,
+                                       "source": "operator"}])
+    del card["metadata"]["automation"]["target"]["worktree"]["reviews"][0]["importedAt"]
+    rc, _, err = _run(env, capsys, monkeypatch, [card])
+    assert (rc, err) == (0, "")
+    edit0, _ = _seqs()
+    assert [(c["until"], c["attribution"].get("seq")) for c in _doc(env)["comments"]] == [(_iso(PUBLISHED0), edit0)] * 2
+
+
+def test_an_edit_exactly_at_until_is_not_replayed(env):
+    doc = Store(env["sm"]).get(SID)
+    started = datetime.fromisoformat(doc["session"]["startedAt"].replace("Z", "+00:00"))
+    edit0, _ = _seqs()
+    at = started + timedelta(milliseconds=next(e["t"] for e in doc["events"] if e["seq"] == edit0))
+    comment = {"id": "c", "path": "src/app.py", "line": 2, "body": "x", "commit": env["c0"]}
+    got = review.build_review(Store(env["sm"]), review.PullRequest("acme/app", 7), sessions=[SID],
+                              checkout=review.Checkout(env["repo"]), pull={"base": env["base"], "head": env["c1"]},
+                              comments=[{**comment, "until": at.isoformat()},
+                                        {**comment, "until": (at + timedelta(milliseconds=1)).isoformat()}])
+    assert [c["attribution"].get("seq", c["attribution"].get("reason")) for c in got["comments"]] == [
+        "no_evidence", edit0]
 
 
 def test_a_card_with_only_fixed_findings_writes_no_review(env, capsys, monkeypatch):
@@ -201,12 +226,20 @@ _REVIEWS = [{"round": 0, "importedAt": 1000, "publishedAt": 2000}, {"round": 1, 
     # Workboard's own done summary, posted before the rework round's import
     (None, "Done. Fixed a/b.py:3", 4900, None),
     ("operator", "a/b.py:3 is still wrong", 3000, "c0"),
+    # at a round's publish the comment reviews it; at the next round's import it no longer does
+    ("operator", "a/b.py:3 is still wrong", 2000, "c0"),
+    ("operator", "a/b.py:3 is still wrong", 4999, "c0"),
+    ("operator", "a/b.py:3 is still wrong", 5000, None),
+    ("operator", "a/b.py:3 is still wrong", 6000, "c1"),
     ("operator", "a/b.py:3 is still wrong", 7000, "c1"),
     # answers to a needs_input question, before the round's PR is published
     ("operator", "Yes, keep a/b.py:3", 1500, None),
     ("operator", "Yes, keep a/b.py:3", 5500, None),
     ("operator", "a/b.py:3 predates every PR", 500, None),
     ("agent:dev", "Verdict: rework: a/b.py:3 is wrong", 1500, "c0"),
+    ("agent:dev", "Verdict: rework: a/b.py:3 is wrong", 1000, "c0"),
+    ("agent:dev", "Verdict: rework: a/b.py:3 is wrong", 999, None),
+    ("agent:dev", "Verdict: rework: a/b.py:3 is wrong", 3000, "c0"),
     ("agent:dev", "**Verdict:** rework, a/b.py:3", 5500, "c1"),
     ("agent:dev", "Verdict: accept, a/b.py:3 looks fine", 1500, None),
     ("agent:dev", "Verdict: reworked a/b.py:3", 1500, None),
@@ -220,11 +253,38 @@ def test_only_operator_reviews_and_agent_rework_verdicts_are_traced(source, body
     assert got == ([] if expected is None else [(expected, 3, source)])
 
 
-def test_a_round_without_its_final_commit_or_import_time_traces_nothing():
-    card = _parsed([{"round": 0, "review": {"items": [_finding(2)]}}, {"round": 1, "changes": {"to": "c1"}}],
-                   [{"round": 0, "importedAt": 1000}],
-                   [{"id": "k", "body": "src/app.py:2", "createdAt": 2000}])
+def test_a_round_without_its_final_commit_traces_nothing():
+    card = _parsed([{"round": 0, "review": {"items": [_finding(2)]}}],
+                   [{"round": 0, "importedAt": 1000, "publishedAt": 2000}],
+                   [{"id": "k", "body": "src/app.py:2", "createdAt": 3000, "source": "operator"}])
     assert fr.card_comments(card, "u") == []
+
+
+@pytest.mark.parametrize(("review", "until"), [
+    ({"importedAt": 1000, "publishedAt": 2000}, 2000),
+    ({"importedAt": 1000}, 1000),
+    ({"publishedAt": 2000}, 2000),
+    ({}, None),
+])
+def test_until_is_the_publish_else_the_import_else_absent(review, until):
+    card = _parsed([{"round": 0, "changes": {"to": "c0"}, "review": {"items": [_finding(2)]}}],
+                   [{"round": 0, **review}], [])
+    [c] = fr.card_comments(card, "u")
+    assert c.get("until") == fd.iso(until) and ("until" in c) == (until is not None)
+
+
+def test_malformed_comments_rounds_and_reviews_are_dropped_and_the_card_still_digests():
+    rounds = [{"round": 0, "changes": {"to": "c0"}}, "junk", {"round": "1", "changes": {"to": "c1"}},
+              {"round": 2, "changes": "x", "review": {"items": "x"}}]
+    reviews = [{"round": 0, "importedAt": 1000, "publishedAt": True}, {"round": "2", "importedAt": 3000}]
+    comments = [{"id": "ok", "body": "a/b.py:3", "createdAt": 1500, "source": "operator"},
+                "junk", {"id": 7, "createdAt": 1}, {"id": "k", "createdAt": "soon"}, {"id": "b", "body": 3, "createdAt": 1}]
+    card = _parsed(rounds, reviews, comments)
+    assert card.rounds == (fd.Round(0, "c0", 1000, None, ()), fd.Round(2, None, None, None, ()))
+    assert [(c.id, c.body) for c in card.comments] == [("ok", "a/b.py:3"), ("b", "")]
+    assert fd.card_digest(card, [])["cardId"] == CARD
+    assert fd.parse_cards({"card": {"id": CARD, "metadata": {"comments": "x", "automation": {"target": {
+        "worktree": {"rounds": "x"}}}}}})[0].comments == ()
 
 
 def test_invalid_finding_items_are_dropped():

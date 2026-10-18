@@ -158,22 +158,29 @@ def _parse_finding(raw: Any) -> Finding | None:
     return Finding(path, line, body, rule if isinstance(rule, str) and rule else None, fixed)
 
 
-def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]], where: str) -> tuple[Round, ...]:
+def _lenient(d: Any, key: str, kind: type | tuple[type, ...]) -> Any:
+    """``d[key]`` when it has the right type, else None: review data the digest never needed must not abort it."""
+    v = d.get(key) if isinstance(d, dict) else None
+    return v if isinstance(v, kind) and not isinstance(v, bool) else None
+
+
+def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]]) -> tuple[Round, ...]:
+    """Malformed rounds, reviews entries and items are dropped, as ``_parse_finding`` drops items."""
     commits: dict[int, str | None] = {}
     findings: dict[int, tuple[Finding, ...]] = {}
-    for raw in _field(worktree, "rounds", list, where) or []:
-        if not isinstance(raw, dict):
-            raise DigestError(f"{where}: rounds must be objects")
-        n = _field(raw, "round", int, where, required=True)
-        commits[n] = _field(_obj(raw, "changes", where), "to", str, where)
-        items = _field(_obj(raw, "review", where), "items", list, where) or []
+    for raw in _lenient(worktree, "rounds", list) or []:
+        n = _lenient(raw, "round", int)
+        if n is None:
+            continue
+        commits[n] = _lenient(_lenient(raw, "changes", dict), "to", str)
+        items = _lenient(_lenient(raw, "review", dict), "items", list) or []
         findings[n] = tuple(f for f in map(_parse_finding, items) if f)
     imported: dict[int, int] = {}
     published: dict[int, int] = {}
     for r in reviews:
-        n = _field(r, "round", int, where)
+        n = _lenient(r, "round", int)
         for key, into in (("importedAt", imported), ("publishedAt", published)):
-            at = _field(r, key, _MS, where)
+            at = _lenient(r, key, _MS)
             if n is not None and at is not None:
                 into[n] = int(at)
     return tuple(
@@ -182,15 +189,12 @@ def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]], where
     )
 
 
-def _parse_comment(raw: Any, where: str) -> CardComment:
-    if not isinstance(raw, dict):
-        raise DigestError(f"{where} is not an object")
-    return CardComment(
-        id=_field(raw, "id", str, where, required=True),
-        body=_field(raw, "body", str, where) or "",
-        created_at=int(_field(raw, "createdAt", _MS, where, required=True)),
-        source=_field(raw, "source", str, where),
-    )
+def _parse_comment(raw: Any) -> CardComment | None:
+    """None for a comment without an id or a timestamp."""
+    cid, at = _lenient(raw, "id", str), _lenient(raw, "createdAt", _MS)
+    if cid is None or at is None:
+        return None
+    return CardComment(cid, _lenient(raw, "body", str) or "", int(at), _lenient(raw, "source", str))
 
 
 def _parse_card(raw: Any, where: str) -> Card:
@@ -212,7 +216,6 @@ def _parse_card(raw: Any, where: str) -> Card:
     if not all(isinstance(x, str) for x in labels) or not all(isinstance(x, dict) for x in reviews):
         raise DigestError(f"{where}: labels must be strings and reviews objects")
     attempts = _field(meta, "attempts", list, where) or []
-    comments = _field(meta, "comments", list, where) or []
     return Card(
         id=cid,
         title=_field(raw, "title", str, where) or "",
@@ -231,8 +234,8 @@ def _parse_card(raw: Any, where: str) -> Card:
         reviews=tuple(
             {k: r.get(k) for k in ("round", "verdict", "decidedBy", "sampled") if k in r} for r in reviews
         ),
-        rounds=_parse_rounds(worktree, reviews, where),
-        comments=tuple(_parse_comment(c, f"{where} comment {i}") for i, c in enumerate(comments)),
+        rounds=_parse_rounds(worktree, reviews),
+        comments=tuple(c for c in map(_parse_comment, _lenient(meta, "comments", list) or []) if c),
     )
 
 
