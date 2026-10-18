@@ -84,6 +84,7 @@ class Round:
     number: int
     commit: str | None  # changes.to, the round's final commit
     imported_at: int | None  # when the round's work came back to the board
+    published_at: int | None  # when the round's PR was published for review
     findings: tuple[Finding, ...]
 
 
@@ -168,12 +169,16 @@ def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]], where
         items = _field(_obj(raw, "review", where), "items", list, where) or []
         findings[n] = tuple(f for f in map(_parse_finding, items) if f)
     imported: dict[int, int] = {}
+    published: dict[int, int] = {}
     for r in reviews:
-        n, at = _field(r, "round", int, where), _field(r, "importedAt", _MS, where)
-        if n is not None and at is not None:
-            imported[n] = int(at)
+        n = _field(r, "round", int, where)
+        for key, into in (("importedAt", imported), ("publishedAt", published)):
+            at = _field(r, key, _MS, where)
+            if n is not None and at is not None:
+                into[n] = int(at)
     return tuple(
-        Round(n, commits.get(n), imported.get(n), findings.get(n, ())) for n in sorted(commits.keys() | imported.keys())
+        Round(n, commits.get(n), imported.get(n), published.get(n), findings.get(n, ()))
+        for n in sorted(commits.keys() | imported.keys())
     )
 
 

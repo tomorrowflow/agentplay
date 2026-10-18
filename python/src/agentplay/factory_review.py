@@ -6,8 +6,10 @@ map, traces two kinds of comment to the edits that wrote the lines:
 
 - the inner reviewer's open findings, ``worktree.rounds[].review.items`` that
   are not ``fixed``;
-- every ``path:line`` mentioned in a card comment, the operator's rework notes
-  and the agents' ``Verdict: rework: …`` alike.
+- every ``path:line`` in an operator comment on a published PR, and in an
+  agent's ``Verdict: rework: …``. Workboard's own comments (session summaries,
+  notices) and every other comment are not mined: a session posts its summary
+  before its round is imported, so no round's tree is the one it describes.
 
 A rework round resumes the same session, so a later round can rewrite the line
 an earlier finding names. Each comment is therefore pinned to the round it was
@@ -22,12 +24,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
-from .factory_digest import Card, Round, Session, iso
+from .factory_digest import Card, CardComment, Round, Session, iso
 from .review import PullRequest
 
 # A repo-relative path (with a `/`, or a file name with a letter-led extension,
 # which leaves out IPs and versions), then `:12`, `:L12` or a range `:12-20`.
 MENTION = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+|[\w-]+(?:\.[\w-]+)*\.[A-Za-z]\w*):L?(\d+)(?:-L?\d+)?\b")
+# openclaw's REVIEW_VERDICT_PATTERN (workboard node-ticket.ts), rework only.
+_REWORK_VERDICT = re.compile(r"^(\*{1,2}|_{1,2})?Verdict\1?:\1?\s*(?:\*{1,2}|_{1,2})?rework(?![a-z0-9])", re.I)
 _PULL_URL = re.compile(r"github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 
 
@@ -48,9 +52,24 @@ def mentions(text: str) -> list[tuple[str, int]]:
     return list(dict.fromkeys(f for f in found if f[1] >= 1))
 
 
-def _round_at(rounds: tuple[Round, ...], at: int) -> Round | None:
-    """The round whose work was the newest on the board at ``at``."""
-    return next((r for r in reversed(rounds) if r.imported_at is not None and r.imported_at <= at), None)
+def _comment_round(rounds: tuple[Round, ...], c: CardComment) -> Round | None:
+    """The round a comment reviews, or None for a comment that is not traced.
+
+    An operator comment reviews the PR published last before it, unless the
+    next round had come back by then. An agent's rework verdict is posted
+    between its round's import and publish.
+    """
+    at = c.created_at
+    if c.source == "operator":
+        i = next((i for i in reversed(range(len(rounds)))
+                  if rounds[i].published_at is not None and rounds[i].published_at <= at), None)
+        if i is None:
+            return None
+        after = rounds[i + 1].imported_at if i + 1 < len(rounds) else None
+        return rounds[i] if after is None or at < after else None
+    if (c.source or "").startswith("agent:") and _REWORK_VERDICT.match(c.body.strip()):
+        return next((r for r in reversed(rounds) if r.imported_at is not None and r.imported_at <= at), None)
+    return None
 
 
 def card_comments(card: Card, url: str) -> list[dict[str, Any]]:
@@ -68,7 +87,7 @@ def card_comments(card: Card, url: str) -> list[dict[str, Any]]:
                 for i, f in enumerate(r.findings) if not f.fixed
             ]
     for c in card.comments:
-        r = _round_at(card.rounds, c.created_at)
+        r = _comment_round(card.rounds, c)
         if r is not None and r.commit:
             out += [
                 pinned(r, f"{card.id[:8]}-r{r.number}-{c.id}-m{j}", path, line, c.body, c.source, "rework")

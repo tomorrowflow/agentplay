@@ -106,8 +106,10 @@ def _card(env: dict[str, Any], items0: list[dict[str, Any]], comments: list[dict
                     "pullRequestUrl": f"https://github.com/acme/app/pull/{pr}"},
         "rounds": [{"round": 0, "changes": {"to": commit0 or env["c0"]}, "review": {"items": items0}},
                    {"round": 1, "changes": {"to": env["c1"]}}],
-        "reviews": [{"round": 0, "verdict": "rework", "importedAt": _ms(IMPORTED0)},
-                    {"round": 1, "verdict": "accept", "importedAt": _ms(IMPORTED1)}],
+        "reviews": [{"round": 0, "verdict": "rework", "importedAt": _ms(IMPORTED0),
+                     "publishedAt": _ms(IMPORTED0) + 30_000},
+                    {"round": 1, "verdict": "accept", "importedAt": _ms(IMPORTED1),
+                     "publishedAt": _ms(IMPORTED1) + 1000}],
     }
     return {"id": CARD, "title": "t", "metadata": {"automation": {"target": {"worktree": worktree}},
                                                   "comments": list(comments)}}
@@ -191,17 +193,31 @@ def _parsed(rounds: list[dict[str, Any]], reviews: list[dict[str, Any]], comment
                                                               "comments": comments}}})[0]
 
 
-def test_a_comment_belongs_to_the_newest_round_on_the_board_when_it_was_written():
-    card = _parsed(
-        [{"round": 0, "changes": {"to": "c0"}}, {"round": 1, "changes": {"to": "c1"}}],
-        [{"round": 0, "importedAt": 1000}, {"round": 1, "importedAt": 5000}],
-        [{"id": "early", "body": "a/b.py:1", "createdAt": 999},
-         {"id": "verdict", "body": "Verdict: rework: a/b.py:3 is wrong", "createdAt": 1000, "source": "agent:dev"},
-         {"id": "during-r1", "body": "a/b.py:4", "createdAt": 4999},
-         {"id": "late", "body": "a/b.py:5", "createdAt": 5000}])
-    got = [(c["id"], c["commit"], c["line"], c["author"]) for c in fr.card_comments(card, "u")]
-    assert got == [("aaaaaaaa-r0-verdict-m0", "c0", 3, "agent:dev"), ("aaaaaaaa-r0-during-r1-m0", "c0", 4, None),
-                   ("aaaaaaaa-r1-late-m0", "c1", 5, None)]
+_ROUNDS = [{"round": 0, "changes": {"to": "c0"}}, {"round": 1, "changes": {"to": "c1"}}]
+_REVIEWS = [{"round": 0, "importedAt": 1000, "publishedAt": 2000}, {"round": 1, "importedAt": 5000, "publishedAt": 6000}]
+
+
+@pytest.mark.parametrize(("source", "body", "at", "expected"), [
+    # Workboard's own done summary, posted before the rework round's import
+    (None, "Done. Fixed a/b.py:3", 4900, None),
+    ("operator", "a/b.py:3 is still wrong", 3000, "c0"),
+    ("operator", "a/b.py:3 is still wrong", 7000, "c1"),
+    # answers to a needs_input question, before the round's PR is published
+    ("operator", "Yes, keep a/b.py:3", 1500, None),
+    ("operator", "Yes, keep a/b.py:3", 5500, None),
+    ("operator", "a/b.py:3 predates every PR", 500, None),
+    ("agent:dev", "Verdict: rework: a/b.py:3 is wrong", 1500, "c0"),
+    ("agent:dev", "**Verdict:** rework, a/b.py:3", 5500, "c1"),
+    ("agent:dev", "Verdict: accept, a/b.py:3 looks fine", 1500, None),
+    ("agent:dev", "Verdict: reworked a/b.py:3", 1500, None),
+    ("agent:dev", "Looked at a/b.py:3", 1500, None),
+    ("operator-ish", "Verdict: rework: a/b.py:3", 1500, None),
+])
+def test_only_operator_reviews_and_agent_rework_verdicts_are_traced(source, body, at, expected):
+    comment = {"id": "k", "body": body, "createdAt": at, **({"source": source} if source else {})}
+    card = _parsed(_ROUNDS, _REVIEWS, [comment])
+    got = [(c["commit"], c["line"], c["author"]) for c in fr.card_comments(card, "u")]
+    assert got == ([] if expected is None else [(expected, 3, source)])
 
 
 def test_a_round_without_its_final_commit_or_import_time_traces_nothing():
