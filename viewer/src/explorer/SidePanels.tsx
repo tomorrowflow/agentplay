@@ -286,7 +286,7 @@ export function InsightsPanel({
       <CategoriesCard map={map} />
       <AgentsCard map={map} ordinals={ordinals} />
       <ModelsCard models={models} model={model} onSelect={onSelectModel} />
-      <ReviewCard review={review} signals={signals} />
+      <SessionChecksCard review={review} signals={signals} />
     </div>
   );
 }
@@ -1322,7 +1322,7 @@ const VERIFICATION_COPY: Record<ReviewMetrics['verification'], string> = {
   edits_after_verify: 'edits after last verify',
 };
 
-function ReviewCard({
+function SessionChecksCard({
   review,
   signals,
 }: {
@@ -1383,7 +1383,7 @@ function ReviewCard({
   ];
   return (
     <SideCard
-      title="Review"
+      title="Session checks"
       aside={<span>whole session</span>}
       collapsible
       defaultOpen={false}
