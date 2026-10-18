@@ -67,6 +67,35 @@ class Attempt:
 
 
 @dataclass(frozen=True)
+class Finding:
+    """One inner-reviewer finding; ``line`` is in the round's final commit unless ``fixed``."""
+
+    path: str
+    line: int
+    body: str
+    rule: str | None
+    fixed: bool
+
+
+@dataclass(frozen=True)
+class Round:
+    """A review round: ``worktree.rounds[]`` joined with ``worktree.reviews[]`` by round number."""
+
+    number: int
+    commit: str | None  # changes.to, the round's final commit
+    imported_at: int | None  # when the round's work came back to the board
+    findings: tuple[Finding, ...]
+
+
+@dataclass(frozen=True)
+class CardComment:
+    id: str
+    body: str
+    created_at: int
+    source: str | None  # "operator", "agent:dev", …; absent on older comments
+
+
+@dataclass(frozen=True)
 class Card:
     id: str
     title: str
@@ -79,6 +108,8 @@ class Card:
     base_commit: str | None
     rework_round: int | None
     reviews: tuple[dict[str, Any], ...]
+    rounds: tuple[Round, ...]
+    comments: tuple[CardComment, ...]
 
 
 def _field(d: dict[str, Any], key: str, kind: type | tuple[type, ...], where: str, *, required: bool = False) -> Any:
@@ -115,6 +146,48 @@ def _parse_attempt(raw: Any, where: str) -> Attempt:
     )
 
 
+def _parse_finding(raw: Any) -> Finding | None:
+    """None for an item the factory should have dropped: no path, no 1-based line, no body."""
+    if not isinstance(raw, dict):
+        return None
+    path, line, body, rule, fixed = (raw.get(k) for k in ("path", "line", "body", "rule", "fixed"))
+    if not (isinstance(path, str) and path and type(line) is int and line >= 1
+            and isinstance(body, str) and body and isinstance(fixed, bool)):
+        return None
+    return Finding(path, line, body, rule if isinstance(rule, str) and rule else None, fixed)
+
+
+def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]], where: str) -> tuple[Round, ...]:
+    commits: dict[int, str | None] = {}
+    findings: dict[int, tuple[Finding, ...]] = {}
+    for raw in _field(worktree, "rounds", list, where) or []:
+        if not isinstance(raw, dict):
+            raise DigestError(f"{where}: rounds must be objects")
+        n = _field(raw, "round", int, where, required=True)
+        commits[n] = _field(_obj(raw, "changes", where), "to", str, where)
+        items = _field(_obj(raw, "review", where), "items", list, where) or []
+        findings[n] = tuple(f for f in map(_parse_finding, items) if f)
+    imported: dict[int, int] = {}
+    for r in reviews:
+        n, at = _field(r, "round", int, where), _field(r, "importedAt", _MS, where)
+        if n is not None and at is not None:
+            imported[n] = int(at)
+    return tuple(
+        Round(n, commits.get(n), imported.get(n), findings.get(n, ())) for n in sorted(commits.keys() | imported.keys())
+    )
+
+
+def _parse_comment(raw: Any, where: str) -> CardComment:
+    if not isinstance(raw, dict):
+        raise DigestError(f"{where} is not an object")
+    return CardComment(
+        id=_field(raw, "id", str, where, required=True),
+        body=_field(raw, "body", str, where) or "",
+        created_at=int(_field(raw, "createdAt", _MS, where, required=True)),
+        source=_field(raw, "source", str, where),
+    )
+
+
 def _parse_card(raw: Any, where: str) -> Card:
     if not isinstance(raw, dict):
         raise DigestError(f"{where} is not an object")
@@ -134,6 +207,7 @@ def _parse_card(raw: Any, where: str) -> Card:
     if not all(isinstance(x, str) for x in labels) or not all(isinstance(x, dict) for x in reviews):
         raise DigestError(f"{where}: labels must be strings and reviews objects")
     attempts = _field(meta, "attempts", list, where) or []
+    comments = _field(meta, "comments", list, where) or []
     return Card(
         id=cid,
         title=_field(raw, "title", str, where) or "",
@@ -152,6 +226,8 @@ def _parse_card(raw: Any, where: str) -> Card:
         reviews=tuple(
             {k: r.get(k) for k in ("round", "verdict", "decidedBy", "sampled") if k in r} for r in reviews
         ),
+        rounds=_parse_rounds(worktree, reviews, where),
+        comments=tuple(_parse_comment(c, f"{where} comment {i}") for i, c in enumerate(comments)),
     )
 
 

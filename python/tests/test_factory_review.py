@@ -1,0 +1,243 @@
+"""`agentplay factory-review`: factory cards' findings traced to the round's edits."""
+
+from __future__ import annotations
+
+import io
+import json
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from agentplay import cli, pipeline, review
+from agentplay import factory_digest as fd
+from agentplay import factory_review as fr
+from agentplay.store import Store
+
+CARD = "aaaaaaaa-1111-4000-8000-000000000001"
+STEM = "66666666-0000-4000-8000-000000000001"
+SID = f"local:claude-code:{STEM}"
+BASE, ROUND0, ROUND1 = ("def f():\n    return 0\n", "def f():\n    return 1\n", "def f():\n    return 2\n")
+EDIT0, EDIT1 = datetime(2026, 9, 10, 1, 0, 10, tzinfo=UTC), datetime(2026, 9, 10, 1, 10, 10, tzinfo=UTC)
+IMPORTED0, IMPORTED1 = datetime(2026, 9, 10, 1, 5, tzinfo=UTC), datetime(2026, 9, 10, 1, 20, tzinfo=UTC)
+
+
+def _ms(dt: datetime) -> int:
+    return int(dt.timestamp() * 1000)
+
+
+def _iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _commit(repo: Path, content: str) -> str:
+    (repo / "src" / "app.py").write_text(content)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "x")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _write_session(home: Path, repo: Path) -> None:
+    """One session resumed for rework: round 0 writes `return 1`, round 1 rewrites it to `return 2`."""
+    proj = home / ".claude" / "projects" / str(repo).replace("/", "-")
+    proj.mkdir(parents=True)
+    app = f"{repo}/src/app.py"
+
+    def rec(when: datetime, **d: Any) -> str:
+        return json.dumps({"timestamp": _iso(when), "cwd": str(repo), "sessionId": STEM, **d}) + "\n"
+
+    lines = [rec(EDIT0.replace(second=0), type="user", message={"role": "user", "content": "do the card"})]
+    for i, (when, old, new, before) in enumerate([(EDIT0, "0", "1", BASE), (EDIT1, "1", "2", ROUND0)]):
+        inp = {"file_path": app, "old_string": f"    return {old}", "new_string": f"    return {new}"}
+        lines.append(rec(when, type="assistant", message={
+            "id": f"m{i}", "model": "claude-sonnet-5", "role": "assistant",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "tool_use", "id": f"e{i}", "name": "Edit", "input": inp}]}))
+        lines.append(rec(when.replace(second=11), type="user", toolUseResult={
+            "filePath": app, "oldString": inp["old_string"], "newString": inp["new_string"],
+            "originalFile": before, "userModified": False, "replaceAll": False,
+            "structuredPatch": [{"oldStart": 1, "oldLines": 2, "newStart": 1, "newLines": 2,
+                                 "lines": [" def f():", f"-    return {old}", f"+    return {new}"]}]},
+            message={"role": "user", "content": [{"type": "tool_result", "tool_use_id": f"e{i}", "content": "ok"}]}))
+    (proj / f"{STEM}.jsonl").write_text("".join(lines))
+
+
+@pytest.fixture()
+def env(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.setenv("AGENTPLAY_HOME", str(tmp_path / "sm"))
+    monkeypatch.delenv("AGENTPLAY_CLAUDE_HOMES", raising=False)
+    repo = tmp_path / "work" / f"wb-{CARD}"
+    (repo / "src").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "remote", "add", "origin", "git@github.com:acme/app.git")
+    base = _commit(repo, BASE)
+    _write_session(home, repo)
+    pipeline.build_all(agents={"claude-code"}, store=Store(tmp_path / "sm"))
+    # A local origin that does not exist, so a missing commit fails here instead of reaching GitHub.
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "no-such-remote"))
+    return {"repo": repo, "sm": tmp_path / "sm", "base": base, "c0": _commit(repo, ROUND0),
+            "c1": _commit(repo, ROUND1)}
+
+
+def _finding(line: int, *, fixed: bool = False, rule: str | None = "no-magic") -> dict[str, Any]:
+    return {"path": "src/app.py", "line": line, "body": "magic number", "fixed": fixed,
+            **({"rule": rule} if rule else {})}
+
+
+def _card(env: dict[str, Any], items0: list[dict[str, Any]], comments: list[dict[str, Any]] = (),
+          *, pr: int = 7, commit0: str | None = None) -> dict[str, Any]:
+    worktree = {
+        "baseCommit": env["base"],
+        "handoff": {"phase": "published", "headCommit": env["c1"], "publishedAt": _ms(IMPORTED1) + 1000,
+                    "pullRequestUrl": f"https://github.com/acme/app/pull/{pr}"},
+        "rounds": [{"round": 0, "changes": {"to": commit0 or env["c0"]}, "review": {"items": items0}},
+                   {"round": 1, "changes": {"to": env["c1"]}}],
+        "reviews": [{"round": 0, "verdict": "rework", "importedAt": _ms(IMPORTED0)},
+                    {"round": 1, "verdict": "accept", "importedAt": _ms(IMPORTED1)}],
+    }
+    return {"id": CARD, "title": "t", "metadata": {"automation": {"target": {"worktree": worktree}},
+                                                  "comments": list(comments)}}
+
+
+def _run(env, capsys, monkeypatch, cards: list[dict[str, Any]], *extra: str) -> tuple[int, str, str]:
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"cards": cards})))
+    rc = cli.main(["factory-review", "--cards", "-", "--repo-path", str(env["repo"]), *extra])
+    out, err = capsys.readouterr()
+    return rc, out, err
+
+
+def _doc(env) -> dict[str, Any]:
+    return json.loads((env["sm"] / "reviews" / "acme_app_7.json").read_text())
+
+
+def _seqs() -> list[int]:
+    doc = Store().get(SID)
+    return [e["seq"] for e in doc["events"] if e.get("tool") == "Edit"]
+
+
+def test_a_round_zero_finding_traces_to_the_round_zero_edit_after_round_one_rewrote_the_line(
+        env, capsys, monkeypatch):
+    rework = {"id": "k1", "body": "Still wrong at `src/app.py:2`, see also src/app.py:L2-4",
+              "createdAt": _ms(IMPORTED0) + 60_000, "source": "operator"}
+    rc, out, _ = _run(env, capsys, monkeypatch, [_card(env, [_finding(2), _finding(1, fixed=True)], [rework])])
+    assert rc == 0
+    assert "acme/app#7" in out and "1 comments" not in out
+    edit0, _ = _seqs()
+    doc = _doc(env)
+    assert doc["pr"]["head"] == env["c1"] and doc["sessions"] == [SID]
+    pin = {"commit": env["c0"], "until": _iso(IMPORTED0)}
+    assert [{k: c[k] for k in ("id", "source", "author", "body", "commit", "until")} for c in doc["comments"]] == [
+        {"id": "aaaaaaaa-r0-f0", "source": "factory-review", "author": "inner-reviewer",
+         "body": "[no-magic] magic number", **pin},
+        {"id": "aaaaaaaa-r0-k1-m0", "source": "rework", "author": "operator", "body": rework["body"], **pin},
+    ]
+    assert all(c["attribution"] == {"kind": "edit", "session": SID, "seq": edit0, "agent": "main", "shared": False}
+               for c in doc["comments"])
+
+
+def test_without_the_round_pin_the_same_line_is_lost_or_blamed_on_the_later_round(env):
+    st, pr = Store(env["sm"]), review.PullRequest("acme/app", 7)
+    pull = {"base": env["base"], "head": env["c1"]}
+    edit0, edit1 = _seqs()
+    comment = {"id": "c", "path": "src/app.py", "line": 2, "body": "x"}
+    variants = [comment, {**comment, "commit": env["c0"]}, {**comment, "commit": env["c0"], "until": _iso(IMPORTED0)}]
+    doc = review.build_review(st, pr, sessions=[SID], checkout=review.Checkout(env["repo"]), pull=pull,
+                              comments=variants)
+    got = [c["attribution"].get("seq", c["attribution"].get("reason")) for c in doc["comments"]]
+    assert got == [edit1, "not_observed", edit0]
+
+
+def test_a_card_with_only_fixed_findings_writes_no_review(env, capsys, monkeypatch):
+    rc, out, _ = _run(env, capsys, monkeypatch, [_card(env, [_finding(2, fixed=True)])])
+    assert rc == 0 and "No card" in out
+    assert not (env["sm"] / "reviews").exists()
+
+
+def test_a_commit_missing_from_the_clone_fails_that_card_only(env, capsys, monkeypatch):
+    broken = _card(env, [_finding(2)], pr=8, commit0="f" * 40)
+    rc, out, err = _run(env, capsys, monkeypatch, [broken, _card(env, [_finding(2)])])
+    assert rc == 1
+    assert "card aaaaaaaa (acme/app#8): commit ffffffffffff is not in" in err
+    assert "acme/app#7" in out and (env["sm"] / "reviews" / "acme_app_7.json").exists()
+
+
+def test_rerunning_overwrites_the_same_review(env, capsys, monkeypatch):
+    cards = [_card(env, [_finding(2)])]
+    _run(env, capsys, monkeypatch, cards)
+    first = _doc(env)
+    _run(env, capsys, monkeypatch, cards)
+    assert [p.name for p in (env["sm"] / "reviews").iterdir()] == ["acme_app_7.json"]
+    assert {k: v for k, v in _doc(env).items() if k != "builtAt"} == {k: v for k, v in first.items() if k != "builtAt"}
+
+
+# ---------------------------------------------------------------- planning, no git
+def _parsed(rounds: list[dict[str, Any]], reviews: list[dict[str, Any]], comments: list[dict[str, Any]]) -> fd.Card:
+    worktree = {"rounds": rounds, "reviews": reviews}
+    return fd.parse_cards({"card": {"id": CARD, "metadata": {"automation": {"target": {"worktree": worktree}},
+                                                              "comments": comments}}})[0]
+
+
+def test_a_comment_belongs_to_the_newest_round_on_the_board_when_it_was_written():
+    card = _parsed(
+        [{"round": 0, "changes": {"to": "c0"}}, {"round": 1, "changes": {"to": "c1"}}],
+        [{"round": 0, "importedAt": 1000}, {"round": 1, "importedAt": 5000}],
+        [{"id": "early", "body": "a/b.py:1", "createdAt": 999},
+         {"id": "verdict", "body": "Verdict: rework: a/b.py:3 is wrong", "createdAt": 1000, "source": "agent:dev"},
+         {"id": "during-r1", "body": "a/b.py:4", "createdAt": 4999},
+         {"id": "late", "body": "a/b.py:5", "createdAt": 5000}])
+    got = [(c["id"], c["commit"], c["line"], c["author"]) for c in fr.card_comments(card, "u")]
+    assert got == [("aaaaaaaa-r0-verdict-m0", "c0", 3, "agent:dev"), ("aaaaaaaa-r0-during-r1-m0", "c0", 4, None),
+                   ("aaaaaaaa-r1-late-m0", "c1", 5, None)]
+
+
+def test_a_round_without_its_final_commit_or_import_time_traces_nothing():
+    card = _parsed([{"round": 0, "review": {"items": [_finding(2)]}}, {"round": 1, "changes": {"to": "c1"}}],
+                   [{"round": 0, "importedAt": 1000}],
+                   [{"id": "k", "body": "src/app.py:2", "createdAt": 2000}])
+    assert fr.card_comments(card, "u") == []
+
+
+def test_invalid_finding_items_are_dropped():
+    items = [_finding(2), _finding(0), {"path": "", "line": 1, "body": "x", "fixed": False},
+             {"path": "a", "line": True, "body": "x", "fixed": False}, {"path": "a", "line": 1, "body": "x"}, "junk"]
+    card = _parsed([{"round": 0, "changes": {"to": "c0"}, "review": {"items": items}}], [], [])
+    assert card.rounds[0].findings == (fd.Finding("src/app.py", 2, "magic number", "no-magic", False),)
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("see `src/app.py:12`", [("src/app.py", 12)]),
+    ("src/app.py:L12 and ./lib/x.ts:3-9", [("src/app.py", 12), ("lib/x.ts", 3)]),
+    ("README.md:4, again README.md:4.", [("README.md", 4)]),
+    ("ios/Sources/Make file:2", []),
+    ("Makefile:3 ios/Makefile:3", [("ios/Makefile", 3)]),
+    ("127.0.0.1:8099 v1.2:3 10:30 ghcr.io/astral-sh/ruff:0", []),
+    ("https://github.com/acme/app/blob/main/src/app.py:4", []),
+])
+def test_path_line_mentions(text, expected):
+    assert fr.mentions(text) == expected
+
+
+def test_review_input_keeps_commit_and_until_and_rejects_a_bad_time(tmp_path):
+    f = tmp_path / "c.json"
+    comments = [{"id": "a", "path": "p", "line": 1, "body": "", "commit": "abc", "until": "2026-09-10T01:05:00Z"},
+                {"id": "b", "path": "p", "line": 1, "body": ""}]
+    f.write_text(json.dumps({"schema": "agentplay-review-input/v1", "comments": comments}))
+    a, b = review.load_comments(f)
+    assert (a["commit"], a["until"]) == ("abc", "2026-09-10T01:05:00Z") and "commit" not in b and "until" not in b
+    f.write_text(json.dumps({"schema": "agentplay-review-input/v1", "comments": [{**comments[0], "until": "soon"}]}))
+    with pytest.raises(review.ReviewError, match="ISO-8601"):
+        review.load_comments(f)

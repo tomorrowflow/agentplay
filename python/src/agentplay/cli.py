@@ -1,4 +1,4 @@
-"""Command line: ``agentplay [view|build|list|export|import|review|factory-digest|agents]``.
+"""Command line: ``agentplay [view|build|list|export|import|review|factory-digest|factory-review|agents]``.
 
 Run with no arguments to build maps for your sessions and open the viewer.
 """
@@ -350,6 +350,16 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def _review_line(doc: dict) -> str:
+    kinds = [c["attribution"] for c in doc["comments"]]
+    unknown = Counter(a["reason"] for a in kinds if a["kind"] == "unknown")
+    detail = ", ".join(f"{n} {reason.replace('_', ' ')}" for reason, n in unknown.most_common())
+    name = f"{doc['pr']['repo']}#{doc['pr']['number']}"
+    return (f"{_b(name)}: {len(kinds)} comments, "
+            f"{len(kinds) - sum(unknown.values())} attributed to an edit, "
+            f"{sum(unknown.values())} unknown{f' ({detail})' if detail else ''}")
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     from . import review
 
@@ -383,12 +393,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(doc, indent=2, ensure_ascii=False))
         return 0
-    kinds = [c["attribution"] for c in doc["comments"]]
-    unknown = Counter(a["reason"] for a in kinds if a["kind"] == "unknown")
-    detail = ", ".join(f"{n} {reason.replace('_', ' ')}" for reason, n in unknown.most_common())
-    print(f"{_b(f'{pr.repo}#{pr.number}')}: {len(kinds)} comments, "
-          f"{len(kinds) - sum(unknown.values())} attributed to an edit, "
-          f"{sum(unknown.values())} unknown{f' ({detail})' if detail else ''}")
+    print(_review_line(doc))
     if skipped:
         print(f"  {skipped} outdated or removed-line comments left out (they name no line at the PR head)")
     bare = [sid for sid in sessions if st.evidence(sid) is None]
@@ -442,6 +447,40 @@ def cmd_factory_digest(args: argparse.Namespace) -> int:
         print(f"  {len(doc['unmatchedSessions'])} factory sessions belong to cards not in the input.")
     print(f"Wrote {out} and {out.with_suffix('.md').name}. They hold card titles and stay on this machine.")
     return 0
+
+
+def cmd_factory_review(args: argparse.Namespace) -> int:
+    from . import factory_digest as fd
+    from . import factory_review as fr
+    from . import review
+
+    st = Store()
+    try:
+        cards = fd.load_cards(args.cards, sys.stdin)
+        if args.card:
+            cards = fd.select_cards(cards, now_ms=0, days=0, prefixes=args.card)
+    except fd.DigestError as exc:
+        print(f"agentplay: {exc}", file=sys.stderr)
+        return 1
+    checkout = review.Checkout(Path(args.repo_path))
+    docs, failed = [], 0
+    for plan in fr.plans(cards, fd.load_sessions(st)):
+        try:
+            doc = review.build_review(st, plan.pr, sessions=plan.sessions, checkout=checkout,
+                                      pull=plan.pull, comments=plan.comments)
+        except review.ReviewError as exc:
+            print(f"agentplay: card {plan.card_id[:8]} ({plan.pr.repo}#{plan.pr.number}): {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        out = review.save_review(st, doc)
+        docs.append(doc)
+        if not args.json:
+            print(f"{_review_line(doc)}. Card {plan.card_id[:8]}, wrote {out.name}.")
+    if args.json:
+        print(json.dumps(docs, indent=2, ensure_ascii=False))
+    elif not docs and not failed:
+        print("No card with a published PR and a session map has an open finding or a path:line comment.")
+    return 1 if failed else 0
 
 
 def cmd_agents(_args: argparse.Namespace) -> int:
@@ -535,6 +574,15 @@ def parser() -> argparse.ArgumentParser:
     fdg.add_argument("--now", metavar="ISO", help="end the window at this time instead of now")
     fdg.add_argument("--json", action="store_true", help="print the digest document")
     fdg.set_defaults(fn=cmd_factory_digest)
+
+    frv = sub.add_parser("factory-review", parents=[common],
+                         help="trace OpenClaw factory cards' review findings to the session edits that wrote the lines")
+    frv.add_argument("--cards", required=True, metavar="PATH",
+                     help="`openclaw workboard list --json` (or `show --json`) output; - reads stdin")
+    frv.add_argument("--repo-path", default=".", help="a local git clone of the cards' PR repository (default: .)")
+    frv.add_argument("--card", action="append", metavar="ID", help="only this card (an id or a unique prefix); repeatable")
+    frv.add_argument("--json", action="store_true", help="print the review documents")
+    frv.set_defaults(fn=cmd_factory_review)
 
     a = sub.add_parser("agents", parents=[common], help="show which agents were found on this machine")
     a.set_defaults(fn=cmd_agents)

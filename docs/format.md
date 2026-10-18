@@ -22,7 +22,7 @@ One map is one JSON object. Its machine-readable definition is [`schema/agentpla
 - [Outcomes](#outcomes)
 - [Content hash](#content-hash)
 - [Writing a producer](#writing-a-producer)
-- [Local-only companions](#local-only-companions): edit evidence, review docs and factory digests, not part of `agentplay/v1`
+- [Local-only companions](#local-only-companions): edit evidence, review docs (also from factory cards) and factory digests, not part of `agentplay/v1`
 
 ## Redaction contract
 
@@ -261,12 +261,13 @@ The reference tool keeps three more kinds of document next to the maps. None is 
   "schema": "agentplay-review-input/v1",
   "comments": [
     { "id": "c1", "path": "src/orders.ts", "line": 38, "body": "…",
-      "author": "reviewer", "url": "https://…", "source": "my-review-bot", "createdAt": "2026-10-01T10:00:00Z" }
+      "author": "reviewer", "url": "https://…", "source": "my-review-bot", "createdAt": "2026-10-01T10:00:00Z",
+      "commit": "<sha>", "until": "2026-10-01T09:00:00Z" }
   ]
 }
 ```
 
-`path` (repo-relative), `line` (1-based, in the PR head) and `body` are required; the rest is optional. It writes `$AGENTPLAY_HOME/reviews/<owner>_<repo>_<n>.json`, overwritten on every run:
+`path` (repo-relative), `line` (1-based, in the PR head) and `body` are required; the rest is optional. `commit` is the commit whose tree `line` refers to, when that is not the PR head. `until` is an ISO-8601 time (UTC when it has no offset): only edits observed before it are replayed for this comment. Together they let a comment on an earlier commit find its edit after a later edit in the same session rewrote the line. Without them a comment is attributed in the PR head against every observed edit, as before. It writes `$AGENTPLAY_HOME/reviews/<owner>_<repo>_<n>.json`, overwritten on every run:
 
 ```jsonc
 {
@@ -289,7 +290,18 @@ The reference tool keeps three more kinds of document next to the maps. None is 
 - **Reasons:** `base` (the replay carried the line through from the PR base untouched), `not_observed` (no placed edit wrote the line: it was written or rewritten outside the sessions), `ambiguous` (the edit that wrote it was observed, identically, in more than one session), `unplaced` (an edit that inserted this text could not be placed in the replay, so its position is unknown), `line_out_of_range` (the head file has no such line), `line_split_differs` (the line holds a character that ends a line for the replay but not for git, such as a form feed, so which part of it was meant is unknown; later lines are still counted as git counts them), `file_not_in_head` and `no_evidence` (none of the sessions has edit evidence for that file).
 - **`causalPath`** comes from the attributed session's map alone, so it is content-free: up to five events of the same agent that touched the edited file up to and including the edit, then the first `verify` after it. `label` is the tool and the map's path, or the shell verb.
 - **`maps`** is each session's map `contentHash` at the time of the review. A rebuild can renumber seqs, so `GET /api/reviews` adds `"stale": true` to a doc whose hash for the requested session no longer matches, and the viewer then neither lights paths nor seeks for it.
-- `body`, `author` and `url` are the comment as given. They live only in this file.
+- `body`, `author` and `url` are the comment as given. They live only in this file. `commit` and `until` are kept when the input had them.
+
+### Factory reviews
+
+`agentplay factory-review --cards <file|-> --repo-path <clone>` writes the same review docs for an OpenClaw software factory's published cards, from the Workboard's card JSON (`openclaw workboard list --json`), without an input file. A card is traced when it has a GitHub PR URL, a base and head commit, and at least one session map (matched to the card as for [factory digests](#factory-digests)). Its comments are:
+
+- each open inner-review finding, `worktree.rounds[r].review.items[]` with `fixed: false`, as `{"id": "<card8>-r<r>-f<i>", "author": "inner-reviewer", "source": "factory-review"}`, with `body` prefixed by `[<rule>] ` when the finding names a rule. Fixed findings are not traced;
+- each `path:line` mentioned in a card comment, as `{"id": "<card8>-r<r>-<commentId>-m<j>", "author": <the comment's source>, "source": "rework"}` with the whole comment as `body`. A path contains a `/` or is a file name with an extension; `:12`, `:L12` and a range `:12-20` (its first line) are read, in backticks or not.
+
+Every comment is pinned to a round `r`. A finding belongs to its round. A card comment belongs to the newest round whose work was on the board when it was written, the latest `worktree.reviews[r].importedAt` at or before its `createdAt`: an agent's `Verdict: rework: …` comes between a round's import and its publish, and an operator's rework note after the publish, and both read that round's tree until the next round is imported. A comment from before the first import is not traced. The comment's `commit` is the round's final commit (`worktree.rounds[r].changes.to`) and `until` its `importedAt`, so a later round of the same resumed session cannot hide the line; a round without both is skipped. The doc's `base` is the worktree's `baseCommit` and `head` the handoff's `headCommit`.
+
+A card with nothing to trace writes nothing. A rerun overwrites the same `<owner>_<repo>_<n>.json`. A commit missing from the clone even after a `git fetch` of the PR head fails that card alone, on stderr, and the command then exits 1.
 
 ### Factory digests
 
