@@ -7,6 +7,11 @@ result is a local-only ``agentplay-review/v1`` document under
 ``$AGENTPLAY_HOME/reviews/``; it holds the comment bodies, so it is never
 written into a map or an export.
 
+A comment may pin its line to an earlier ``commit`` than the PR head, with an
+``until`` time: only edits observed before then are replayed for it. That is
+how a comment on one rework round still finds its edit after a later round of
+the same resumed session rewrote the line.
+
 Comments come from a generic ``agentplay-review-input/v1`` file, or from
 GitHub through the ``gh`` CLI. That fetch, and a ``git fetch`` of the PR head
 when the checkout lacks it, are the only network calls, and happen only when
@@ -87,6 +92,14 @@ def load_comments(path: Path) -> list[dict[str, Any]]:
             or not isinstance(c.get("body"), str)
         ):
             raise ReviewError(f"{path}: comment {i} needs a string path, an integer line and a string body")
+        pins = {k: c[k] for k in ("commit", "until") if c.get(k) is not None}
+        if not all(isinstance(v, str) and v for v in pins.values()):
+            raise ReviewError(f"{path}: comment {i}: commit and until must be strings")
+        if "until" in pins:
+            try:
+                _epoch(pins["until"])
+            except ValueError:
+                raise ReviewError(f"{path}: comment {i}: until must be an ISO-8601 time") from None
         cid = str(c.get("id") or "")
         while not cid or cid in seen:
             cid = f"{cid}#{i}"
@@ -99,6 +112,7 @@ def load_comments(path: Path) -> list[dict[str, Any]]:
             "path": c["path"],
             "line": c["line"],
             "body": c["body"],
+            **pins,
         })
     return out
 
@@ -208,9 +222,15 @@ def sessions_for(store: Store, pr: PullRequest) -> list[str]:
     ]
 
 
+def _epoch(iso: str) -> float:
+    """An ISO-8601 time in epoch seconds; one without an offset is UTC."""
+    t = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return (t if t.tzinfo else t.replace(tzinfo=UTC)).timestamp()
+
+
 def _started(doc: dict[str, Any]) -> float:
     try:
-        return datetime.fromisoformat(str(doc["session"]["startedAt"]).replace("Z", "+00:00")).timestamp()
+        return _epoch(str(doc["session"]["startedAt"]))
     except (KeyError, ValueError):
         return 0.0
 
@@ -241,7 +261,7 @@ def _observed_edits(
         for i, edit in enumerate((evidence or {}).get("edits", [])):
             if edit.get("path") and edit.get("repo") in repo_ids:
                 at = _started(doc) + t.get(edit["seq"], 0) / 1000
-                rows.append((at, order, edit["seq"], i, {**edit, "session_id": sid, "event_id": edit["seq"]}))
+                rows.append((at, order, edit["seq"], i, {**edit, "session_id": sid, "event_id": edit["seq"], "at": at}))
     by_path: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for *_, edit in sorted(rows, key=lambda r: r[:4]):
         by_path[edit["path"]].append(edit)
@@ -274,13 +294,16 @@ def _replay_index(head: str, line: int) -> int | UnknownReason:
 def _attribute(
     comment: dict[str, Any], checkout: Checkout, pull: dict[str, str], edits: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    head = checkout.show(pull["head"], comment["path"])
+    head = checkout.show(comment.get("commit") or pull["head"], comment["path"])
     if head is None:
         return _unknown("file_not_in_head")
     index = _replay_index(head, comment["line"])
     if isinstance(index, str):
         return _unknown(index)
     final = line_fingerprints(head)
+    if "until" in comment:
+        until = _epoch(comment["until"])
+        edits = [e for e in edits if e["at"] < until]
     if not edits:
         return _unknown("no_evidence")
     base = checkout.show(pull["base"], comment["path"])
@@ -343,7 +366,7 @@ def build_review(
         if doc is None:
             raise ReviewError(f"no map for session {sid}; run `agentplay build` first")
         loaded[sid] = (doc, store.evidence(sid))
-    checkout.ensure(pr, pull["base"], pull["head"])
+    checkout.ensure(pr, pull["base"], pull["head"], *dict.fromkeys(c["commit"] for c in comments if "commit" in c))
     by_path = _observed_edits(loaded, pr)
     out = []
     for c in comments:

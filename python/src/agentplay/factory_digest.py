@@ -67,6 +67,36 @@ class Attempt:
 
 
 @dataclass(frozen=True)
+class Finding:
+    """One inner-reviewer finding; ``line`` is in the round's final commit unless ``fixed``."""
+
+    path: str
+    line: int
+    body: str
+    rule: str | None
+    fixed: bool
+
+
+@dataclass(frozen=True)
+class Round:
+    """A review round: ``worktree.rounds[]`` joined with ``worktree.reviews[]`` by round number."""
+
+    number: int
+    commit: str | None  # changes.to, the round's final commit
+    imported_at: int | None  # when the round's work came back to the board
+    published_at: int | None  # when the round's PR was published for review
+    findings: tuple[Finding, ...]
+
+
+@dataclass(frozen=True)
+class CardComment:
+    id: str
+    body: str
+    created_at: int
+    source: str | None  # "operator", "agent:dev", …; absent on older comments
+
+
+@dataclass(frozen=True)
 class Card:
     id: str
     title: str
@@ -79,6 +109,8 @@ class Card:
     base_commit: str | None
     rework_round: int | None
     reviews: tuple[dict[str, Any], ...]
+    rounds: tuple[Round, ...]
+    comments: tuple[CardComment, ...]
 
 
 def _field(d: dict[str, Any], key: str, kind: type | tuple[type, ...], where: str, *, required: bool = False) -> Any:
@@ -113,6 +145,56 @@ def _parse_attempt(raw: Any, where: str) -> Attempt:
         error=_field(raw, "error", str, where),
         context_tokens=None if tokens is None else int(tokens),
     )
+
+
+def _parse_finding(raw: Any) -> Finding | None:
+    """None for an item the factory should have dropped: no path, no 1-based line, no body."""
+    if not isinstance(raw, dict):
+        return None
+    path, line, body, rule, fixed = (raw.get(k) for k in ("path", "line", "body", "rule", "fixed"))
+    if not (isinstance(path, str) and path and type(line) is int and line >= 1
+            and isinstance(body, str) and body and isinstance(fixed, bool)):
+        return None
+    return Finding(path, line, body, rule if isinstance(rule, str) and rule else None, fixed)
+
+
+def _lenient(d: Any, key: str, kind: type | tuple[type, ...]) -> Any:
+    """``d[key]`` when it has the right type, else None: review data the digest never needed must not abort it."""
+    v = d.get(key) if isinstance(d, dict) else None
+    return v if isinstance(v, kind) and not isinstance(v, bool) else None
+
+
+def _parse_rounds(worktree: dict[str, Any], reviews: list[dict[str, Any]]) -> tuple[Round, ...]:
+    """Malformed rounds, reviews entries and items are dropped, as ``_parse_finding`` drops items."""
+    commits: dict[int, str | None] = {}
+    findings: dict[int, tuple[Finding, ...]] = {}
+    for raw in _lenient(worktree, "rounds", list) or []:
+        n = _lenient(raw, "round", int)
+        if n is None:
+            continue
+        commits[n] = _lenient(_lenient(raw, "changes", dict), "to", str)
+        items = _lenient(_lenient(raw, "review", dict), "items", list) or []
+        findings[n] = tuple(f for f in map(_parse_finding, items) if f)
+    imported: dict[int, int] = {}
+    published: dict[int, int] = {}
+    for r in reviews:
+        n = _lenient(r, "round", int)
+        for key, into in (("importedAt", imported), ("publishedAt", published)):
+            at = _lenient(r, key, _MS)
+            if n is not None and at is not None:
+                into[n] = int(at)
+    return tuple(
+        Round(n, commits.get(n), imported.get(n), published.get(n), findings.get(n, ()))
+        for n in sorted(commits.keys() | imported.keys())
+    )
+
+
+def _parse_comment(raw: Any) -> CardComment | None:
+    """None for a comment without an id or a timestamp."""
+    cid, at = _lenient(raw, "id", str), _lenient(raw, "createdAt", _MS)
+    if cid is None or at is None:
+        return None
+    return CardComment(cid, _lenient(raw, "body", str) or "", int(at), _lenient(raw, "source", str))
 
 
 def _parse_card(raw: Any, where: str) -> Card:
@@ -152,6 +234,8 @@ def _parse_card(raw: Any, where: str) -> Card:
         reviews=tuple(
             {k: r.get(k) for k in ("round", "verdict", "decidedBy", "sampled") if k in r} for r in reviews
         ),
+        rounds=_parse_rounds(worktree, reviews),
+        comments=tuple(c for c in map(_parse_comment, _lenient(meta, "comments", list) or []) if c),
     )
 
 
