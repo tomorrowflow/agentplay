@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import gzip
+import http.client
 import io
 import json
 import os
@@ -31,8 +32,9 @@ def _line(**d: Any) -> str:
     return json.dumps(d) + "\n"
 
 
-def _write_claude_session(home: Path, stem: str, cwd: Path, *, ts_day: str = "2026-09-10", edits_without_read: bool = False) -> Path:
-    proj = home / ".claude" / "projects" / "-work-app"
+def _write_claude_session(home: Path, stem: str, cwd: Path, *, ts_day: str = "2026-09-10", edits_without_read: bool = False,
+                          project: str = "-work-app") -> Path:
+    proj = home / ".claude" / "projects" / project
     proj.mkdir(parents=True, exist_ok=True)
     f = proj / f"{stem}.jsonl"
     target = f"{cwd}/src/app.py"
@@ -485,6 +487,34 @@ def _remote_server(env, allowed: frozenset[str]):
 
 
 ALLOWED = frozenset({"allowed.example"})
+
+
+def test_a_card_link_redirects_to_the_cards_newest_session(env):
+    card_dir = "-home-factory-factory-worktrees-wb-c0ffee12"
+    _write_claude_session(env["home"], "aaaaaaaa-0000-0000-0000-00000000000a", env["repo"], ts_day="2026-09-10", project=card_dir)
+    _write_claude_session(env["home"], "bbbbbbbb-0000-0000-0000-00000000000b", env["repo"], ts_day="2026-09-12", project=card_dir)
+    _write_claude_session(env["home"], "cccccccc-0000-0000-0000-00000000000c", env["repo"], ts_day="2026-09-14")
+    pipeline.build_all(agents={"claude-code"}, store=Store(env["sm"]))
+    httpd = serve(0, store=Store(env["sm"]), host="127.0.0.1", allowed_hosts=ALLOWED)
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+
+    def get(path: str, host: str) -> tuple[int, str | None]:
+        conn = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1])
+        conn.request("GET", path, headers={"Host": host})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        return resp.status, resp.getheader("Location")
+
+    try:
+        assert get("/card/c0ffee12", "allowed.example:8443") == (
+            302, "/?session=local%3Aclaude-code%3Abbbbbbbb-0000-0000-0000-00000000000b")
+        assert get("/card/c0ffee1", "allowed.example")[0] == 404
+        assert get("/card/", "allowed.example")[0] == 404
+        assert get("/card/c0ffee12", "evil.example") == (403, None)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 @pytest.mark.parametrize("host", ["allowed.example", "allowed.example:8443", "ALLOWED.example:443"])
