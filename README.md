@@ -149,6 +149,8 @@ tailscale serve --bg --https=8443 http://127.0.0.1:7317
 
 Then open `https://<AGENTPLAY_PUBLIC_HOST>:8443/`. The port is published on `127.0.0.1` only. The server trusts a request only when its `Host` is the name in `AGENTPLAY_PUBLIC_HOST` (any port), and refuses every other read; that is what `--allow-host` does. Through Docker even `http://127.0.0.1:7317` on the host is another peer, so open the tailnet name there too. The email signup stays off.
 
+OpenClaw factory cards run in worktrees named `wb-<cardId>`, so `/card/<cardId>` redirects to the newest session of that card (404 until a scan has picked it up). Link to it from the card.
+
 ## Supported agents
 
 | Agent | Reads from (defaults) | Subagent lanes | Tokens | Notes |

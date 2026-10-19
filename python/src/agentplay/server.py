@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from . import hook_detail, prompt_images, review
+from . import factory_digest, hook_detail, prompt_images, review
 from .store import Store
 
 MAX_PAGE = 200
@@ -335,7 +335,7 @@ class _Handler(BaseHTTPRequestHandler):
         site = self.headers.get("Sec-Fetch-Site")
         if url.path.startswith("/api/") and site is not None and site.lower() not in _FETCH_SITES:
             return self._error(403, "forbidden", "Only the local viewer can read this.")
-        if url.path.startswith("/api/"):
+        if url.path.startswith(("/api/", "/card/")):
             # `agentplay view` scans in the background, so the index can change
             # while we are serving. Cheap: one stat unless it actually moved.
             with self.lock:
@@ -359,6 +359,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._reviews(q)
             if url.path.startswith("/api/"):
                 return self._error(404, "not_found", "Unknown endpoint.")
+            if url.path.startswith("/card/"):
+                return self._card(url.path.removeprefix("/card/"))
             return self._static(url.path)
         except BrokenPipeError:
             return None
@@ -371,6 +373,21 @@ class _Handler(BaseHTTPRequestHandler):
     def _rows(self) -> list[dict[str, Any]]:
         with self.lock:
             return [r for r in self.store.rows() if r.get("role") not in ("subagent", "helper")]
+
+    def _card(self, card: str) -> None:
+        """Redirect to the newest session a factory card ran, found by its ``…-wb-<cardId>`` project dir.
+
+        The card's Claude session ids live only in the gateway, and a card can have
+        several; the worktree name is in every one's transcript path.
+        """
+        ran = [r for r in self._rows() if card and factory_digest.card_id_of(r.get("sourcePath") or "") == card]
+        if not ran:
+            return self._error(404, "not_found", "No session of this card has been scanned yet.")
+        newest = max(ran, key=lambda r: r.get("startedAt") or "")
+        self.send_response(302)
+        self.send_header("Location", f"/?session={quote(newest['sessionId'], safe='')}")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _status(self) -> None:
         rows = self._rows()
