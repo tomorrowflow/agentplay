@@ -759,6 +759,28 @@ def test_hex_named_files_are_still_file_operations():
     assert ops.get(os.path.normpath("/repo/cafe1234")) == "create"
 
 
+@pytest.mark.parametrize(
+    ("cmd", "want"),
+    [
+        ("python3 - <<'EOF'\ndef f() -> tuple:\n    return a > b\nEOF", {}),
+        ("cat > out.txt <<'EOF'\nx > y\nEOF", {"out.txt": "create"}),
+        ("cat > out.txt <<-EOF\n\tx > y\n\tEOF\necho hi > log.txt", {"out.txt": "create", "log.txt": "create"}),
+        ('python3 - <<"EOF"\nok = n > limit\nEOF', {}),
+        ("python3 - <<EOF\nok = n > limit\nEOF\ntrue && echo hi > log.txt", {"log.txt": "create"}),
+        ("cat > run.sh <<'EOF'\nrm x\nmv a b\nEOF", {"run.sh": "create"}),
+    ],
+)
+def test_heredoc_bodies_are_not_commands(cmd, want):
+    assert sm.file_ops("Bash", {"command": cmd}, "/repo") == {
+        os.path.normpath(f"/repo/{k}"): v for k, v in want.items()
+    }
+
+
+def test_heredoc_body_lines_are_not_output_intents():
+    cmd = "cat > release.sh <<'EOF'\ngit commit -m release\nEOF\ngit status"
+    assert sm.output_intents("Bash", {"command": cmd}, None, None) == []
+
+
 def test_configured_repo_roots_claim_paths_in_a_deleted_worktree(tmp_path):
     base = tmp_path / "x" / "worktrees"
     resolver = sm.RepoResolver(sm.parse_repo_roots(f"{base}/wb-*=acme/widget"))
