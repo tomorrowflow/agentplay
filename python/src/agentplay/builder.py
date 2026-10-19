@@ -1000,6 +1000,25 @@ def pr_create_intent(tool: str, inp: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+_HEREDOC_RE = re.compile(r"(?<!<)<<(-?)\s*(['\"]?)([A-Za-z_][\w.-]*)\2")
+
+
+def _command_segments(cmd: str) -> list[str]:
+    """The ``&&``/``;``/``||``/newline segments of a shell command, with here-document
+    bodies dropped: a body line is stdin text, not a command or a redirect."""
+    lines: list[str] = []
+    pending: list[tuple[bool, str]] = []
+    for line in cmd.split("\n"):
+        if pending:
+            tabs, word = pending[0]
+            if (line.lstrip("\t") if tabs else line) == word:
+                pending.pop(0)
+            continue
+        lines.append(line)
+        pending = [(m.group(1) == "-", m.group(3)) for m in _HEREDOC_RE.finditer(line)]
+    return re.split(r"&&|;|\|\||\n", "\n".join(lines))
+
+
 def file_ops(tool: str, inp: dict[str, Any], cwd: str | None) -> dict[str, str]:
     """abs path -> create | modify | delete | rename-from | rename-to for file-changing calls."""
 
@@ -1024,7 +1043,7 @@ def file_ops(tool: str, inp: dict[str, Any], cwd: str | None) -> dict[str, str]:
         m = _CD_RE.match(str(cmd))
         if m:
             base = os.path.expanduser(m.group(2).strip())
-        for seg in re.split(r"&&|;|\|\||\n", str(cmd)):
+        for seg in _command_segments(str(cmd)):
             w = _cmd_words(seg)
             if not w:
                 continue
@@ -1218,7 +1237,7 @@ def loose_command(raw: str) -> str:
 
 def _segments_words(cmd: str) -> list[list[str]]:
     out = []
-    for seg in re.split(r"&&|\|\||;|\n", cmd):
+    for seg in _command_segments(cmd):
         w = _cmd_words(seg)
         if w:
             out.append(w)
