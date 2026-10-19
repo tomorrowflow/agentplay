@@ -489,6 +489,21 @@ def _remote_server(env, allowed: frozenset[str]):
 ALLOWED = frozenset({"allowed.example"})
 
 
+@pytest.mark.parametrize(("forwarded", "origin", "want"), [
+    ("pub.example:35535", "https://pub.example:35535", 200),
+    (None, "https://pub.example:35535", 403),
+    ("pub.example:35535", "https://pub.example:443", 403),
+    ("evil.example:35535", "https://pub.example:35535", 403),
+    (None, "null", 403),
+])
+def test_a_portal_page_is_trusted_by_its_forwarded_host(env, forwarded, origin, want):
+    with _remote_server(env, frozenset({"localhost"})) as (request, _sid):
+        headers = {"Host": "localhost:17317", "Origin": origin, "Sec-Fetch-Site": "same-origin"}
+        if forwarded:
+            headers["X-Forwarded-Host"] = forwarded
+        assert request("/api/status", headers)[0] == want
+
+
 def test_a_card_link_redirects_to_the_cards_newest_session(env):
     card_dir = "-home-factory-factory-worktrees-wb-c0ffee12"
     _write_claude_session(env["home"], "aaaaaaaa-0000-0000-0000-00000000000a", env["repo"], ts_day="2026-09-10", project=card_dir)
