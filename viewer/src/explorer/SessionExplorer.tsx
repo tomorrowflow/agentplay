@@ -145,9 +145,29 @@ function useExplorerSessions(windowKey: WindowKey) {
     [list.data]
   );
   const listIds = useMemo(() => sessions.map((s) => s.sessionId), [sessions]);
-  const selectedId = sessions.some((s) => s.sessionId === selected)
+  const listed = sessions.some((s) => s.sessionId === selected);
+  // A linked session (an OpenClaw card's `/card/<id>` lands here) can be
+  // pages deep; load pages until it turns up instead of showing the newest.
+  // Not while searching: a search that drops the selection should not walk
+  // every page of its results.
+  const seeking =
+    !!selected &&
+    !listed &&
+    !debouncedSearch &&
+    !!list.hasNextPage &&
+    !list.isFetchNextPageError;
+  const { isFetchingNextPage, fetchNextPage } = list;
+  // Keyed on the page count too: a fast page can land without a render ever
+  // seeing `isFetchingNextPage` flip.
+  const pages = list.data?.pages.length ?? 0;
+  useEffect(() => {
+    if (seeking && !isFetchingNextPage) void fetchNextPage();
+  }, [seeking, isFetchingNextPage, fetchNextPage, pages]);
+  const selectedId = listed
     ? selected
-    : (sessions[0]?.sessionId ?? null);
+    : seeking
+      ? null
+      : (sessions[0]?.sessionId ?? null);
   const selectedRow = sessions.find((s) => s.sessionId === selectedId) ?? null;
   const mapQuery = useSessionExplorerMap(selectedId, listIds);
   return {
@@ -157,6 +177,7 @@ function useExplorerSessions(windowKey: WindowKey) {
     setSelected,
     debouncedSearch,
     list,
+    seeking,
     sessions,
     selectedId,
     selectedRow,
@@ -233,7 +254,7 @@ export function SessionExplorer({
   );
   const setCollapsed = setSidebarCollapsed;
 
-  if (list.isLoading && !list.data)
+  if ((list.isLoading && !list.data) || data.seeking)
     return (
       <div className="flex flex-col gap-3">
         <SessionExplorerSkeleton />

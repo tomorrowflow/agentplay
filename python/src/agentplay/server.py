@@ -304,8 +304,14 @@ class _Handler(BaseHTTPRequestHandler):
         # Same origin means the port too: with `--allow-host localhost` behind a
         # tunnel, another local web app on another port must not count.
         origin = self.headers.get("Origin")
-        return (origin is None or self._allowed_origin(origin)
-                or _origin_authority(origin) == _host_authority(self.headers.get("Host")))
+        if origin is None or self._allowed_origin(origin):
+            return True
+        page = _origin_authority(origin)
+        # An OpenClaw Portal rewrites Host to `localhost:<port>` and names the public
+        # host in X-Forwarded-Host. A page can't send that header without a CORS
+        # preflight, which this server never grants.
+        return page is not None and page in (_host_authority(self.headers.get("Host")),
+                                             _host_authority(self.headers.get("X-Forwarded-Host")))
 
     def _allowed_origin(self, origin: str | None) -> bool:
         """Whether ``origin`` is this server's own, or one listed in ``AGENTPLAY_DEV_ORIGINS``.
