@@ -583,6 +583,20 @@ def test_classify_tool_error(text, cls, code):
         ('git commit -m "run pytest; ruff"', "exec"),
         ("git commit -m 'fix pytest'", "exec"),
         ("grep -r pytest .", "search"),
+        ("xcodebuild test -scheme App -destination 'platform=iOS Simulator'", "verify"),
+        ("cd ios && xcodebuild -project A.xcodeproj -scheme App build-for-testing", "verify"),
+        ("xcodebuild -list", "exec"),
+        ("swiftlint lint --strict --quiet", "verify"),
+        ("swift test", "verify"),
+        (
+            "docker compose -f server/docker-compose.yml -p vd-test run --rm --no-deps"
+            ' -e A=1 -v "$PWD:/repo" -w /repo/server webapp pytest webapp/tests/ -q',
+            "verify",
+        ),
+        ("docker run --rm -v /x:/repo -w /repo python:3.12-slim python -m pytest", "verify"),
+        ("docker exec -it web npm test", "verify"),
+        ("docker compose run --rm webapp alembic upgrade head", "exec"),
+        ("docker run --rm -v pytest:/x img true", "exec"),
     ],
 )
 def test_verify_only_matches_the_command_word(cmd, kind):

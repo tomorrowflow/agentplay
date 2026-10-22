@@ -60,7 +60,9 @@ WEB_TOOLS = {"WebFetch", "WebSearch", "web_search"}
 _VERIFY_RE = re.compile(
     r"\b(pytest|go test|go vet|npm (?:run )?(?:test|build|lint)|pnpm (?:run )?(?:test|check|lint)"
     r"|yarn (?:test|build)|tsc\b|ruff|mypy|make (?:test|check)|cargo (?:test|clippy|check)"
-    r"|vitest|jest|just test|git (?:(?:-C \S+|--no-pager) )*diff(?: \S+)* --check\b)"
+    r"|vitest|jest|just test|git (?:(?:-C \S+|--no-pager) )*diff(?: \S+)* --check\b"
+    r"|swiftlint|swift (?:test|build)\b"
+    r"|xcodebuild\b.*\s(?:test|build|build-for-testing|test-without-building|analyze)\b)"
 )
 _SEARCH_VERBS = {"grep", "rg", "find", "ls", "tree", "fd", "ag"}
 _READ_VERBS = {"cat", "sed", "head", "tail", "less", "wc", "jq", "nl", "bat"}
@@ -605,6 +607,8 @@ _LAUNCHERS_2 = {
     ("yarn", "dlx"),
 }
 _PYTHON_RE = re.compile(r"python(?:\d+(?:\.\d+)?)?")
+_CONTAINER_RUN_RE = re.compile(r"(?:docker(?: compose)?|docker-compose|podman)\b.*?\s(?:run|exec)\s")
+_BARE_WORD_RE = re.compile(r"[\w./-]+")
 
 
 def _url_host(url: str) -> str:
@@ -625,27 +629,36 @@ def _is_verify(cmd: str) -> bool:
     ``npx`` and env assignments) of each ``&&``/``;``/``|`` segment — never an
     argument, so ``echo pytest`` or ``git commit -m "pytest"`` stay ``exec``.
     """
-    for seg in _SEGMENT_RE.split(_QUOTED_RE.sub(" ", cmd)):
-        words = seg.split()
-        while words:
-            head = os.path.basename(words[0])
-            if _ENV_ASSIGN_RE.fullmatch(words[0]):
+    return any(_runs_verify(seg.split()) for seg in _SEGMENT_RE.split(_QUOTED_RE.sub(" ", cmd)))
+
+
+def _runs_verify(words: list[str]) -> bool:
+    while words:
+        head = os.path.basename(words[0])
+        if _ENV_ASSIGN_RE.fullmatch(words[0]):
+            words = words[1:]
+        elif head in _LAUNCHERS_1:
+            words = words[1:]
+            while words and _LAUNCHER_ARG_RE.fullmatch(words[0]):
                 words = words[1:]
-            elif head in _LAUNCHERS_1:
+        elif len(words) > 1 and (head, words[1]) in _LAUNCHERS_2:
+            words = words[2:]
+            while words and words[0].startswith("-"):
                 words = words[1:]
-                while words and _LAUNCHER_ARG_RE.fullmatch(words[0]):
-                    words = words[1:]
-            elif len(words) > 1 and (head, words[1]) in _LAUNCHERS_2:
-                words = words[2:]
-                while words and words[0].startswith("-"):
-                    words = words[1:]
-            elif len(words) > 1 and _PYTHON_RE.fullmatch(head) and words[1] == "-m":
-                words = words[2:]
-            else:
-                break
-        if words and _VERIFY_RE.match(" ".join([os.path.basename(words[0]), *words[1:]])):
-            return True
-    return False
+        elif len(words) > 1 and _PYTHON_RE.fullmatch(head) and words[1] == "-m":
+            words = words[2:]
+        else:
+            break
+    if not words:
+        return False
+    if _CONTAINER_RUN_RE.match(" ".join([os.path.basename(words[0]), *words[1:]])):
+        # The container's command follows options, image or service, whose arity
+        # varies, so try each later bare word as the command word.
+        return any(
+            _BARE_WORD_RE.fullmatch(words[i]) and _runs_verify(words[i:])
+            for i in range(2, len(words))
+        )
+    return bool(_VERIFY_RE.match(" ".join([os.path.basename(words[0]), *words[1:]])))
 
 
 def _shell_paths(cmd: str, cwd: str | None) -> list[str]:
