@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agentplay.skill_inventory import installed_skills, pulled_at
+from agentplay.skill_inventory import installed_skills, pulled_at, repo_skills
 
 
 def _file(path: Path, text: str = "---\nname: x\n---\n") -> None:
@@ -64,3 +64,14 @@ def test_without_the_pull_stamp_there_is_no_inventory(tmp_path):
     (home / "skills-pulled-at").unlink()
     assert pulled_at(home) is None
     assert installed_skills(home) is None
+
+
+def test_repo_skills_are_the_project_skills_in_the_tree_at_a_commit(skills_repo, tmp_path):
+    repo, first, second = skills_repo
+    assert repo_skills(repo, first) == {"a", "b", "c"}
+    assert repo_skills(repo, second) == {"a", "b", "c", "late"}
+    assert repo_skills(repo, "0" * 40) is None
+    assert repo_skills(repo, "--output=x") is None
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert repo_skills(plain, first) is None

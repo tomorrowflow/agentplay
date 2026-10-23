@@ -240,6 +240,7 @@ agentplay agents      show which agents were found on this machine
 | `--cards <file>` | factory-digest, factory-review | `openclaw workboard list --json` output, or `-` for stdin |
 | `--days 7`, `--card <id>` | factory-digest | cards published in the last N days, or this card (repeatable, id prefix); `--card` prints the digest and writes `factory-cards-<date>` files only with `--out` |
 | `--out <dir>`, `--now <iso>` | factory-digest | output folder (default `~/.agentplay/digests`); end the window at this time |
+| `--repo-path <dir>` | factory-digest | a local git clone of the cards' repository; each failed skill then says whether the repo had it as a project skill at the card's base commit (default: not checked) |
 | `--card <id>` | factory-review | only this card (repeatable, id prefix); default: every card with a published PR |
 
 ## The session map format
