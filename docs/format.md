@@ -331,9 +331,16 @@ A card with nothing to trace writes nothing. A rerun overwrites the same `<owner
           "error": null, "contextTokens": 98000, "transcriptOutcome": "verified", "stoppedOnDenial": false, "fidelity": "ok", "metrics": { /* as totals */ } }
       ],
       "unattributed": null,
-      "flags": [] }
+      "flags": ["skill-load-failed"],
+      "skillLoadFailures": [
+        { "name": "grilling", "node": "linux-factory-mini", "installed": false,
+          "installedAs": ["mattpocock-skills:grilling"] }
+      ] }
   ],
-  "unmatchedSessions": ["local:claude-code:9a0b…"]
+  "unmatchedSessions": ["local:claude-code:9a0b…"],
+  "nodes": {
+    "linux-factory-mini": { "pulledAt": "2026-10-16T02:00:00Z", "skills": ["mattpocock-skills:grilling", "pstack:how"] }
+  }
 }
 ```
 
@@ -342,5 +349,7 @@ A card with nothing to trace writes nothing. A rerun overwrites the same `<owner
 - **`attempts`** are the card's own attempts. Each event goes to the latest-started attempt whose start and end (open while running) hold it, with one second of slack because a map's `session.startedAt` drops its fraction of a second, so an event placed from it can sit up to a second early (the card's times are milliseconds); events outside every attempt are `unattributed`. A session resumed for rework so yields two attempts. `status`, `error` and `contextTokens` are the card's; `transcriptOutcome` is the [outcome](#outcomes) of the attempt's events alone, so it reads `blocked` when a denial is among the last events even if the agent worked past it. `stoppedOnDenial` is true when the attempt's last call (any event but a request, user turn, compaction, error, delay, model switch or VCS record) failed as `permission_denied` or `blocked`.
 - **`fidelity`** is `mismatch` when the card and the transcript disagree: an attempt the card calls `stopped` or `succeeded` that has `stoppedOnDenial`, or a `succeeded` one whose `transcriptOutcome` is `interrupted`. It is `no_events` when no event falls in the attempt.
 - **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (some attempt has `stoppedOnDenial`; a denial the agent recovered from only counts in `stops`), `attempt-fidelity-mismatch`, `no-transcript` and `skill-load-failed` (some skill in `totals.skills` has `failed` above 0; the Markdown names those skills after the card).
+- **`skillLoadFailures`** has one entry per failed skill and node, where the node is the one whose session made the failed call. A session's node is the folder above `projects/` in its transcript path, so a transcript at `<archive>/<node>/projects/<project>/<id>.jsonl` belongs to `<node>`, and a local one to `.claude`. `installed` says whether that exact name is in the node's inventory, and is null when the node has none. `installedAs` lists the other installed names with the same part after the last `:`, so a call to `grilling` on a node that has `mattpocock-skills:grilling` names it. The Markdown writes each as `grilling on <node>: not installed, installed as mattpocock-skills:grilling` after the card in the `skill-load-failed` flag line.
 - **`unmatchedSessions`** are factory sessions whose card is not in the input.
+- **`nodes`** lists each node of the digest's cards' sessions with its skill inventory, read from the node's folder, which the nightly pull fills with the same layout as `~/.claude`. `pulledAt` is the content of `skills-pulled-at`. Without that file there is no inventory: `pulledAt` is null, `skills` is empty, and the digest never claims a skill is not installed. `skills` holds the names a session there could invoke. Personal skills (`skills/**/SKILL.md`, named by the folder that holds `SKILL.md`) and commands (`commands/**/*.md`, named by the file stem) are bare. Plugin skills and commands are `<plugin>:<name>`, where `<plugin>` is the `name` in the plugin's `.claude-plugin/plugin.json`, else its folder name. The plugins counted are the install paths in `plugins/installed_plugins.json`, moved from the node's `~/.claude` onto its folder, so an older version left in `plugins/cache` does not count, and every plugin under `plugins/synced`. A synced plugin folder's `~gN` suffix is dropped from its fallback name. The Markdown adds a `## Node skills` section with one line per node, its skill count and pull date, or `no inventory`.
 - `title` and `labels` are the card's own text. They live only in these files.
