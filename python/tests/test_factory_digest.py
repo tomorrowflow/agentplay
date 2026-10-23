@@ -330,8 +330,9 @@ def test_a_failed_skill_says_whether_the_repo_had_it_at_the_cards_base_commit(en
     doc = _digest(st, cards, repo_path=repo)
     assert in_repo(doc) == {CARD_A: {"a": True, "acme:c": True, "late": False}, CARD_B: {"late": None}}
     assert in_repo(_digest(st, cards)) == {CARD_A: {"a": None, "acme:c": None, "late": None}, CARD_B: {"late": None}}
-    assert (f"- **skill-load-failed**: Early (a on .claude: no inventory, in repo at {first[:7]}; acme:c on .claude: "
-            f"no inventory, in repo at {first[:7]}; late on .claude: no inventory, not in repo at {first[:7]}); "
+    project = f"project skill at {first[:7]}, which factory runs cannot load"
+    assert (f"- **skill-load-failed**: Early (a on .claude: {project}; acme:c on .claude: {project}; "
+            f"late on .claude: no inventory, not in repo at {first[:7]}); "
             "Unknown base (late on .claude: no inventory)") in fd.render_markdown(doc).splitlines()
 
 
