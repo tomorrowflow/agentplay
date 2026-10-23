@@ -863,6 +863,8 @@ def test_skill_events_count_typed_loads_once_and_keep_model_calls_as_is(tmp_path
         u(12, "break it"),
         skill_call(13, "t3", "missing"),
         result(14, "t3", err=True),
+        u(15, "<command-message>grill-me</command-message>\n<command-name>/mattpocock-skills:grill-me</command-name>"),
+        marker(16, "/home/x/.claude/plugins/synced/a_b/c/skills/productivity/grill-me"),
     ]
     doc = sm.build_claude_code_map(_jsonl(tmp_path / "q" / "s.jsonl", rows))
     skills = [
@@ -873,4 +875,5 @@ def test_skill_events_count_typed_loads_once_and_keep_model_calls_as_is(tmp_path
         ("pstack:how", None, False),
         ("review", None, False),
         ("missing", None, True),
+        ("mattpocock-skills:grill-me", True, False),
     ]

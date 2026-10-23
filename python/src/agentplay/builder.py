@@ -46,7 +46,7 @@ from ._core.ingestion.coding_agent._sources._jsonl_utils import (
     _RE_SKILL_DIR,
     _typed_command_for_load,
 )
-from ._core.ingestion.coding_agent.skill_names import normalize_skill_name
+from ._core.ingestion.coding_agent.skill_names import normalize_skill_name, skill_name_from_skill_md_path
 from ._util import captured
 
 SCHEMA = "agentplay/v1"
@@ -2412,7 +2412,7 @@ def _typed_skill_load(
         return None
     match = _RE_SKILL_DIR.match(stripped)
     path = match.group(1).strip().rstrip("/") if match else ""
-    dir_name = normalize_skill_name(path.split("/.claude/", 1)[-1])
+    dir_name = skill_name_from_skill_md_path(f"{path}/SKILL.md")
     if dir_name is None:
         return None
     leaf = _skill_leaf(dir_name)
