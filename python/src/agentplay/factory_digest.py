@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO, TypedDict
 
 from .builder import _NON_CALL_KINDS, _error_source, classify_outcome
-from .skill_inventory import installed_skills, pulled_at
+from .skill_inventory import installed_skills, pulled_at, repo_skills
 from .store import Store, _atomic_write
 
 DIGEST_SCHEMA = "agentplay-factory-digest/v1"
@@ -351,6 +351,7 @@ class SkillLoadFailure(TypedDict):
     node: str
     installed: bool | None  # None when the node has no skill inventory
     installedAs: list[str]
+    inRepo: bool | None  # None without --repo-path, a base commit, or that commit in the clone
 
 
 class NodeSkills(TypedDict):
@@ -538,8 +539,13 @@ def _leaf(skill: str) -> str:
     return skill.rpartition(":")[2]
 
 
-def skill_load_failures(sessions: list[Session], nodes: dict[str, NodeSkills]) -> list[SkillLoadFailure]:
-    """One entry per failed skill and the node of the session that called it."""
+def skill_load_failures(
+    sessions: list[Session], nodes: dict[str, NodeSkills], repo: frozenset[str] | None
+) -> list[SkillLoadFailure]:
+    """One entry per failed skill and the node of the session that called it.
+
+    ``repo`` holds the project skills of the card's repository at its base commit.
+    """
     pairs = sorted({
         (str(e.get("skill") or ""), s.home.name)
         for s in sessions for e in s.events if e["kind"] == "skill" and e.get("err")
@@ -553,6 +559,7 @@ def skill_load_failures(sessions: list[Session], nodes: dict[str, NodeSkills]) -
             "node": node,
             "installed": None if skills is None else name in skills,
             "installedAs": [k for k in skills or [] if k != name and _leaf(k) == _leaf(name)],
+            "inRepo": None if repo is None else _leaf(name) in repo,
         })
     return out
 
@@ -565,11 +572,12 @@ def node_skills(sessions: list[Session]) -> dict[str, NodeSkills]:
     }
 
 
-def card_digest(card: Card, sessions: list[Session], nodes: dict[str, NodeSkills]) -> CardDigest:
+def card_digest(card: Card, sessions: list[Session], nodes: dict[str, NodeSkills], repo_path: Path | None) -> CardDigest:
     events = timeline(sessions)
     slices, rest = split_attempts(events, card.attempts)
     attempts = [_attempt_digest(a, slices[a.id]) for a in card.attempts]
     totals = metrics([t.event for t in events]) if sessions else None
+    repo = repo_skills(repo_path, card.base_commit) if repo_path and card.base_commit and _failed_skills(totals) else None
     return {
         "cardId": card.id,
         "title": card.title,
@@ -586,7 +594,7 @@ def card_digest(card: Card, sessions: list[Session], nodes: dict[str, NodeSkills
         "attempts": attempts,
         "unattributed": metrics([t.event for t in rest]) if rest else None,
         "flags": card_flags(totals, attempts),
-        "skillLoadFailures": skill_load_failures(sessions, nodes),
+        "skillLoadFailures": skill_load_failures(sessions, nodes, repo),
     }
 
 
@@ -605,7 +613,8 @@ def select_cards(cards: list[Card], *, now_ms: int, days: int, prefixes: list[st
 
 
 def build_digest(
-    cards: list[Card], sessions: list[Session], *, now_ms: int, days: int, prefixes: list[str]
+    cards: list[Card], sessions: list[Session], *, now_ms: int, days: int, prefixes: list[str],
+    repo_path: Path | None = None,
 ) -> FactoryDigest:
     by_card: dict[str, list[Session]] = {}
     for s in sorted(sessions, key=lambda s: s.started_ms):
@@ -620,7 +629,7 @@ def build_digest(
         "schema": DIGEST_SCHEMA,
         "builtAt": iso(now_ms) or "",
         "window": {"from": iso(now_ms - days * DAY_MS) or "", "to": iso(now_ms) or "", "days": days},
-        "cards": [card_digest(c, by_card.get(c.id, []), nodes) for c in chosen],
+        "cards": [card_digest(c, by_card.get(c.id, []), nodes, repo_path) for c in chosen],
         "unmatchedSessions": sorted(s.id for s in sessions if s.card_id not in known),
         "nodes": nodes,
     }
@@ -641,14 +650,16 @@ def _cell(text: str) -> str:
 def _flag_entry(flag: Flag, card: CardDigest) -> str:
     title = _cell(card["title"] or card["cardId"])
     if flag == "skill-load-failed":
-        return f"{title} ({_cell('; '.join(map(_failure, card['skillLoadFailures'])))})"
+        failures = "; ".join(_failure(f, card["baseCommit"]) for f in card["skillLoadFailures"])
+        return f"{title} ({_cell(failures)})"
     return title
 
 
-def _failure(f: SkillLoadFailure) -> str:
+def _failure(f: SkillLoadFailure, base: str | None) -> str:
     state = {None: "no inventory", True: "installed", False: "not installed"}[f["installed"]]
     hint = f", installed as {', '.join(f['installedAs'])}" if f["installedAs"] else ""
-    return f"{f['name']} on {f['node']}: {state}{hint}"
+    repo = "" if f["inRepo"] is None or base is None else f", {'in' if f['inRepo'] else 'not in'} repo at {base[:7]}"
+    return f"{f['name']} on {f['node']}: {state}{hint}{repo}"
 
 
 def render_markdown(doc: FactoryDigest) -> str:

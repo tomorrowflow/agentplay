@@ -11,6 +11,7 @@ COPY viewer viewer
 RUN cd viewer && pnpm run build
 
 FROM python:3.13-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 COPY python /src/python
 COPY --from=viewer /src/viewer/dist /src/python/src/agentplay/viewer
 RUN pip install --no-cache-dir --root-user-action=ignore /src/python && rm -rf /src \

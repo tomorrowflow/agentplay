@@ -419,7 +419,8 @@ def cmd_factory_digest(args: argparse.Namespace) -> int:
             now = now.replace(tzinfo=UTC)
         cards = fd.load_cards(args.cards, sys.stdin)
         doc = fd.build_digest(cards, fd.load_sessions(st), now_ms=int(now.timestamp() * 1000),
-                              days=args.days, prefixes=args.card or [])
+                              days=args.days, prefixes=args.card or [],
+                              repo_path=Path(args.repo_path) if args.repo_path else None)
         out_dir = Path(args.out) if args.out else (None if args.card else st.base / "digests")
         out = fd.save_digest(out_dir, doc, picked=bool(args.card)) if out_dir else None
     except fd.DigestError as exc:
@@ -570,6 +571,9 @@ def parser() -> argparse.ArgumentParser:
     fdg.add_argument("--card", action="append", metavar="ID",
                      help="this card (an id or a unique prefix), whenever it was published; repeatable. "
                           "Prints the digest and writes files only with --out")
+    fdg.add_argument("--repo-path", metavar="DIR",
+                     help="a local git clone of the cards' repository; says whether a failed skill was a project "
+                          "skill at the card's base commit")
     fdg.add_argument("--out", metavar="DIR", help="output folder (default: $AGENTPLAY_HOME/digests)")
     fdg.add_argument("--now", metavar="ISO", help="end the window at this time instead of now")
     fdg.add_argument("--json", action="store_true", help="print the digest document")

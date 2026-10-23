@@ -90,8 +90,8 @@ def _attempt(aid: str, status: str, start: datetime, end: datetime | None) -> di
 
 
 def _card(cid: str, title: str, attempts: list[dict[str, Any]], *, published: datetime | None = None,
-          accepted: datetime | None = None, **extra: Any) -> dict[str, Any]:
-    worktree: dict[str, Any] = {"branch": f"wb/{cid[:8]}", "baseCommit": "b" * 40}
+          accepted: datetime | None = None, base: str = "b" * 40, **extra: Any) -> dict[str, Any]:
+    worktree: dict[str, Any] = {"branch": f"wb/{cid[:8]}", "baseCommit": base}
     if published is not None:
         worktree["handoff"] = {"phase": "published", "publishedAt": _ms(published), "headCommit": "h" * 40,
                                "pullRequestUrl": "https://github.com/acme/app/pull/12"}
@@ -129,7 +129,7 @@ def env(tmp_path, monkeypatch):
 
 def _digest(st: Store, cards: list[dict[str, Any]], **kw: Any) -> dict[str, Any]:
     return fd.build_digest(fd.parse_cards({"cards": cards}), fd.load_sessions(st), now_ms=_ms(NOW),
-                           days=kw.get("days", 7), prefixes=kw.get("prefixes", []))
+                           days=kw.get("days", 7), prefixes=kw.get("prefixes", []), repo_path=kw.get("repo_path"))
 
 
 def _by_id(doc: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -291,11 +291,12 @@ def test_a_failed_skill_says_whether_its_node_had_it_installed_and_under_which_n
     cards = _by_id(doc)
     assert cards[CARD_A]["skillLoadFailures"] == [
         {"name": "grilling", "node": "linux-factory-mini", "installed": False,
-         "installedAs": ["mattpocock-skills:grilling"]},
-        {"name": "mattpocock-skills:tdd", "node": "linux-factory-mini", "installed": True, "installedAs": []},
+         "installedAs": ["mattpocock-skills:grilling"], "inRepo": None},
+        {"name": "mattpocock-skills:tdd", "node": "linux-factory-mini", "installed": True, "installedAs": [],
+         "inRepo": None},
     ]
     assert cards[CARD_B]["skillLoadFailures"] == [
-        {"name": "grilling", "node": "linux-factory-bare", "installed": None, "installedAs": []},
+        {"name": "grilling", "node": "linux-factory-bare", "installed": None, "installedAs": [], "inRepo": None},
     ]
     assert doc["nodes"] == {
         "linux-factory-bare": {"pulledAt": None, "skills": []},
@@ -309,6 +310,29 @@ def test_a_failed_skill_says_whether_its_node_had_it_installed_and_under_which_n
     assert md[md.index("## Node skills"):] == [
         "## Node skills", "", "- linux-factory-bare (no inventory)", "- linux-factory-mini (2 skills, pulled 2026-10-16)",
     ]
+
+
+def test_a_failed_skill_says_whether_the_repo_had_it_at_the_cards_base_commit(env, skills_repo):
+    repo, first, _ = skills_repo
+    st = env["build"]({
+        _stem(1): (_wb(CARD_A), [(_at(10, 1), "skill late --fail", 1), (_at(10, 2), "skill a --fail", 1),
+                                 (_at(10, 3), "skill acme:c --fail", 1)]),
+        _stem(2): (_wb(CARD_B), [(_at(10, 1), "skill late --fail", 1)]),
+    })
+    cards = [
+        _card(CARD_A, "Early", [_attempt("a", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0), base=first),
+        _card(CARD_B, "Unknown base", [_attempt("b", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0)),
+    ]
+
+    def in_repo(doc: dict[str, Any]) -> dict[str, dict[str, bool | None]]:
+        return {c["cardId"]: {f["name"]: f["inRepo"] for f in c["skillLoadFailures"]} for c in doc["cards"]}
+
+    doc = _digest(st, cards, repo_path=repo)
+    assert in_repo(doc) == {CARD_A: {"a": True, "acme:c": True, "late": False}, CARD_B: {"late": None}}
+    assert in_repo(_digest(st, cards)) == {CARD_A: {"a": None, "acme:c": None, "late": None}, CARD_B: {"late": None}}
+    assert (f"- **skill-load-failed**: Early (a on .claude: no inventory, in repo at {first[:7]}; acme:c on .claude: "
+            f"no inventory, in repo at {first[:7]}; late on .claude: no inventory, not in repo at {first[:7]}); "
+            "Unknown base (late on .claude: no inventory)") in fd.render_markdown(doc).splitlines()
 
 
 def test_a_refused_check_is_not_a_check_that_ran(env):
@@ -471,10 +495,11 @@ DIGEST_SCHEMA = {
                 "flags": {"type": "array", "items": {"enum": list(fd.FLAGS)}},
                 "skillLoadFailures": {"type": "array", "items": {
                     "type": "object", "additionalProperties": False,
-                    "required": ["name", "node", "installed", "installedAs"],
+                    "required": ["name", "node", "installed", "installedAs", "inRepo"],
                     "properties": {"name": {"type": "string"}, "node": {"type": "string"},
                                    "installed": {"type": ["boolean", "null"]},
-                                   "installedAs": {"type": "array", "items": {"type": "string"}}}}},
+                                   "installedAs": {"type": "array", "items": {"type": "string"}},
+                                   "inRepo": {"type": ["boolean", "null"]}}}},
                 "attempts": {"type": "array", "items": {
                     "type": "object",
                     "additionalProperties": False,
