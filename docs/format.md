@@ -166,7 +166,7 @@ Every event has these fields:
 |---|---|
 | `read`, `search`, `edit`, `exec`, `verify` | `tool`, `verb` (shell only), `targets[]`, `outBytes`, `dur`, `vcs?` |
 | `mcp` | `server`, `tool`, `outBytes`, `dur` |
-| `skill` | `skill` |
+| `skill` | `skill`, `typed?` (`true` when the user started the skill by typing `/name`; absent when the model called the Skill tool) |
 | `subagent` | `subagentType`, `model?`, `child` (agent id) |
 | `web` | `host` (a hostname, or `search`) |
 | `tool` | `tool`: any other tool (ToolSearch, AskUserQuestion, TodoWrite, …) |

@@ -817,3 +817,60 @@ def test_repo_roots_env_is_read_when_no_roots_are_given(tmp_path, monkeypatch):
 def test_malformed_repo_roots_are_rejected(value):
     with pytest.raises(ValueError, match="AGENTPLAY_REPO_ROOTS"):
         sm.parse_repo_roots(value)
+
+
+def test_skill_events_count_typed_loads_once_and_keep_model_calls_as_is(tmp_path):
+    ts = lambda s: f"2026-09-10T01:00:{s:02d}Z"  # noqa: E731
+
+    def u(s, c, **k):
+        return {"type": "user", "timestamp": ts(s), "message": {"role": "user", "content": c}, **k}
+
+    def skill_call(s, tid, name):
+        return {
+            "type": "assistant",
+            "timestamp": ts(s),
+            "message": {
+                "id": f"m{s}",
+                "model": "claude-sonnet-5",
+                "usage": {"output_tokens": 1},
+                "content": [{"type": "tool_use", "id": tid, "name": "Skill", "input": {"skill": name}}],
+            },
+        }
+
+    def result(s, tid, err=False):
+        return u(s, [{"type": "tool_result", "tool_use_id": tid, "content": "ok", "is_error": err}])
+
+    def marker(s, skill_dir, **k):
+        text = f"Base directory for this skill: {skill_dir}\n\nbody"
+        return u(s, [{"type": "text", "text": text}], isMeta=True, **k)
+
+    rows = [
+        u(
+            1,
+            "<command-message>tdd</command-message>\n<command-name>/pstack:tdd</command-name>\n"
+            "<command-args>fix it</command-args>",
+        ),
+        marker(2, "/home/x/.claude/plugins/cache/p/pstack/1.0/skills/tdd"),
+        u(3, "now explain"),
+        skill_call(4, "t1", "pstack:how"),
+        result(5, "t1"),
+        marker(6, "/home/x/.claude/plugins/cache/p/pstack/1.0/skills/how", sourceToolUseID="t1"),
+        u(7, "older harness"),
+        skill_call(8, "t2", "review"),
+        result(9, "t2"),
+        marker(10, "/home/x/.claude/skills/review"),
+        u(11, "<command-name>/clear</command-name>\n<command-message>clear</command-message>"),
+        u(12, "break it"),
+        skill_call(13, "t3", "missing"),
+        result(14, "t3", err=True),
+    ]
+    doc = sm.build_claude_code_map(_jsonl(tmp_path / "q" / "s.jsonl", rows))
+    skills = [
+        (e["skill"], e.get("typed"), e["err"]) for e in doc["events"] if e["kind"] == "skill"
+    ]
+    assert skills == [
+        ("pstack:tdd", True, False),
+        ("pstack:how", None, False),
+        ("review", None, False),
+        ("missing", None, True),
+    ]

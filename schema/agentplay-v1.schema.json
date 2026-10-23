@@ -755,6 +755,12 @@
             "null"
           ]
         },
+        "typed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "subagentType": {
           "type": [
             "string",
