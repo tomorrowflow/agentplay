@@ -32,6 +32,7 @@ import hmac
 import json
 import os
 import re
+from collections import Counter
 from collections.abc import Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -40,6 +41,12 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ._core.claude_edit_evidence import call_edit_evidence, result_patches
+from ._core.ingestion.coding_agent._sources._jsonl_utils import (
+    _RE_COMMAND_NAME,
+    _RE_SKILL_DIR,
+    _typed_command_for_load,
+)
+from ._core.ingestion.coding_agent.skill_names import normalize_skill_name
 from ._util import captured
 
 SCHEMA = "agentplay/v1"
@@ -2373,6 +2380,53 @@ def user_turns(lines: Iterable[str]) -> list[tuple[int, dict[str, Any], str]]:
     return turns
 
 
+def _skill_leaf(name: str) -> str:
+    return name.lstrip("/").rsplit(":", 1)[-1]
+
+
+def _typed_skill_load(
+    rec: dict[str, Any], text: str, commands: Counter[str], skill_calls: dict[str, str]
+) -> str | None:
+    """Name of the skill a main-agent user record shows the user started by typing, else None.
+
+    Tracks the current turn in ``commands`` (its unconsumed ``<command-name>``s)
+    and ``skill_calls`` (Skill tool_use id -> skill leaf, marker not yet seen).
+    A "Base directory for this skill:" marker belongs to a Skill call when it
+    names one by ``sourceToolUseID``, or, in older transcripts without that
+    field, when a pending call of this turn has the same leaf; either way the
+    call already has its own event. Any other marker is a typed load.
+    """
+    stripped = text.lstrip()
+    if not stripped[:200].lower().startswith("base directory for this skill:"):
+        if not rec.get("isMeta"):
+            commands.clear()
+            skill_calls.clear()
+            for m in _RE_COMMAND_NAME.finditer(text):
+                canonical = normalize_skill_name(m.group(1).strip().lstrip("/"))
+                if canonical is not None:
+                    commands[canonical] += 1
+        return None
+    source = rec.get("sourceToolUseID")
+    if isinstance(source, str) and source:
+        skill_calls.pop(source, None)
+        return None
+    match = _RE_SKILL_DIR.match(stripped)
+    path = match.group(1).strip().rstrip("/") if match else ""
+    dir_name = normalize_skill_name(path.split("/.claude/", 1)[-1])
+    if dir_name is None:
+        return None
+    leaf = _skill_leaf(dir_name)
+    call = next((cid for cid, call_leaf in skill_calls.items() if call_leaf == leaf), None)
+    if call is not None:
+        del skill_calls[call]
+        return None
+    typed = _typed_command_for_load(leaf, commands)
+    if typed is not None:
+        commands[typed] -= 1
+        return typed
+    return dir_name
+
+
 def _read_claude_transcript(
     b: MapBuilder, path: Path, agent_id: str, child_links: dict[str, str]
 ) -> None:
@@ -2390,6 +2444,8 @@ def _read_claude_transcript(
     edit_results: list[dict[str, Any]] = []  # the records carrying their results, for result_patches
     ready_ts: float | None = None  # when the agent last had new input (user turn / tool result)
     last_text = ""  # last assistant text block; only its length feeds classify_outcome, never stored
+    turn_commands: Counter[str] = Counter()
+    turn_skill_calls: dict[str, str] = {}
     with path.open(encoding="utf-8", errors="replace") as fh:
         for line in fh:
             try:
@@ -2481,6 +2537,19 @@ def _read_claude_transcript(
                             ts,
                         )
                         ready_ts = ts
+                    if agent_id == "main" and text is not None:
+                        typed = _typed_skill_load(d, text, turn_commands, turn_skill_calls)
+                        if typed is not None:
+                            b.add(
+                                {
+                                    "kind": "skill",
+                                    "tool": "Skill",
+                                    "agent": agent_id,
+                                    "skill": typed[:80],
+                                    "typed": True,
+                                },
+                                ts,
+                            )
                 if isinstance(content, list):
                     if any(
                         isinstance(x, dict) and x.get("tool_use_id") in edit_calls for x in content
@@ -2607,6 +2676,8 @@ def _read_claude_transcript(
                         tool_events[c["id"]] = ev
                         if ev["tool"] in EDIT_TOOLS:
                             edit_calls[c["id"]] = (ev["tool"], c.get("input"), ev)
+                        if agent_id == "main" and ev["kind"] == "skill":
+                            turn_skill_calls[c["id"]] = _skill_leaf(ev["skill"])
     for m in msgs.values():
         if not m["usage"]:
             continue

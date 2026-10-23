@@ -1423,7 +1423,10 @@ export function describeEvent(
         detail: 'MCP call',
       };
     case 'skill':
-      return { title: `/${e.skill ?? 'skill'}`, detail: 'Skill invoked' };
+      return {
+        title: `/${e.skill ?? 'skill'}`,
+        detail: e.typed ? 'Skill typed by user' : 'Skill invoked',
+      };
     case 'subagent':
       return {
         title: `Subagent · ${e.subagentType || 'general'}`,

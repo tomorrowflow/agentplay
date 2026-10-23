@@ -166,7 +166,7 @@ Every event has these fields:
 |---|---|
 | `read`, `search`, `edit`, `exec`, `verify` | `tool`, `verb` (shell only), `targets[]`, `outBytes`, `dur`, `vcs?` |
 | `mcp` | `server`, `tool`, `outBytes`, `dur` |
-| `skill` | `skill` |
+| `skill` | `skill`, `typed?` (`true` when the user started the skill by typing `/name`; absent when the model called the Skill tool) |
 | `subagent` | `subagentType`, `model?`, `child` (agent id) |
 | `web` | `host` (a hostname, or `search`) |
 | `tool` | `tool`: any other tool (ToolSearch, AskUserQuestion, TodoWrite, …) |
@@ -323,7 +323,8 @@ A card with nothing to trace writes nothing. A rerun overwrites the same `<owner
         "errors": { "total": 3, "bySource": { "tool": 3 }, "byClass": { "exit_code": 2, "permission_denied": 1 } },
         "retries": 1, "delays": 0, "edits": 14,
         "verify": { "afterLastEdit": true, "verbsAfterLastEdit": ["pnpm test", "git diff"], "lastVerifyFailed": false },
-        "stops": { "permissionDenied": 1, "blocked": 0 }
+        "stops": { "permissionDenied": 1, "blocked": 0 },
+        "skills": { "pstack:how": { "calls": 2, "failed": 0 }, "pstack:tdd": { "calls": 1, "failed": 0 } }
       },
       "attempts": [
         { "id": "a1", "status": "succeeded", "startedAt": "2026-10-15T10:00:00Z", "endedAt": "2026-10-15T10:20:00Z",
@@ -337,9 +338,9 @@ A card with nothing to trace writes nothing. A rerun overwrites the same `<owner
 ```
 
 - **Selection.** A card is published at its handoff's `publishedAt` when the handoff phase is `published`, otherwise at its rework's `acceptedAt`. The digest lists the cards published in the window, or the cards named with `--card`, whenever they were published.
-- **`totals`** covers every event of the card's sessions, in wall-clock order; it is null when no session was found. **`metrics`** and **`unattributed`** use the same shape. `peakContext` is the largest main-agent request (fresh input plus cache write plus cache read), as `totals.maxContext` in a map. `verify.afterLastEdit` is null when there is no edit, and `verbsAfterLastEdit` names the shell verbs of the `verify` events after it. A check refused as `permission_denied` or `blocked` did not run, so `verify` leaves it out; it still counts in `errors` and `stops`.
+- **`totals`** covers every event of the card's sessions, in wall-clock order; it is null when no session was found. **`metrics`** and **`unattributed`** use the same shape. `peakContext` is the largest main-agent request (fresh input plus cache write plus cache read), as `totals.maxContext` in a map. `verify.afterLastEdit` is null when there is no edit, and `verbsAfterLastEdit` names the shell verbs of the `verify` events after it. A check refused as `permission_denied` or `blocked` did not run, so `verify` leaves it out; it still counts in `errors` and `stops`. `skills` counts the `skill` events by skill name, whether the model called the Skill tool or the user typed `/name`; `failed` counts those whose `err` is set.
 - **`attempts`** are the card's own attempts. Each event goes to the latest-started attempt whose start and end (open while running) hold it, with one second of slack because a map's `session.startedAt` drops its fraction of a second, so an event placed from it can sit up to a second early (the card's times are milliseconds); events outside every attempt are `unattributed`. A session resumed for rework so yields two attempts. `status`, `error` and `contextTokens` are the card's; `transcriptOutcome` is the [outcome](#outcomes) of the attempt's events alone, so it reads `blocked` when a denial is among the last events even if the agent worked past it. `stoppedOnDenial` is true when the attempt's last call (any event but a request, user turn, compaction, error, delay, model switch or VCS record) failed as `permission_denied` or `blocked`.
 - **`fidelity`** is `mismatch` when the card and the transcript disagree: an attempt the card calls `stopped` or `succeeded` that has `stoppedOnDenial`, or a `succeeded` one whose `transcriptOutcome` is `interrupted`. It is `no_events` when no event falls in the attempt.
-- **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (some attempt has `stoppedOnDenial`; a denial the agent recovered from only counts in `stops`), `attempt-fidelity-mismatch` and `no-transcript`.
+- **`flags`**: `no-verify-after-edit`, `verify-failed-last`, `stopped-on-permission` (some attempt has `stoppedOnDenial`; a denial the agent recovered from only counts in `stops`), `attempt-fidelity-mismatch`, `no-transcript` and `skill-load-failed` (some skill in `totals.skills` has `failed` above 0; the Markdown names those skills after the card).
 - **`unmatchedSessions`** are factory sessions whose card is not in the input.
 - `title` and `labels` are the card's own text. They live only in these files.

@@ -321,6 +321,7 @@ export const sessionMapEventSchema = z
     dur: optNum,
     server: optStr,
     skill: optStr,
+    typed: z.boolean().nullish(),
     subagentType: optStr,
     model: optStr,
     child: optStr,

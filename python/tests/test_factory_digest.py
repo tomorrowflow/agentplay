@@ -35,7 +35,8 @@ def _iso(dt: datetime) -> str:
 
 
 # One step is (when, what, context tokens). `what` is a Bash command, "edit",
-# "deny" (a refused `rm -rf build`) or "deny <command>" (that command, refused).
+# "deny" (a refused `rm -rf build`), "deny <command>" (that command, refused) or
+# "skill <name>" (a Skill tool call; "skill <name> --fail" fails to load).
 Step = tuple[datetime, str, int]
 
 
@@ -53,6 +54,8 @@ def _write_session(home: Path, project: str, stem: str, steps: list[Step]) -> No
         tid = f"t{i}"
         if what == "edit":
             name, inp = "Edit", {"file_path": f"{cwd}/src/a{i}.py", "old_string": "a", "new_string": "b"}
+        elif what.startswith("skill "):
+            name, inp = "Skill", {"skill": what.split()[1]}
         else:
             name, inp = "Bash", {"command": "rm -rf build" if what == "deny" else what.removeprefix("deny ")}
         denied = what == "deny" or what.startswith("deny ")
@@ -231,6 +234,28 @@ def test_verify_after_last_edit_and_a_failing_last_verify(env):
                          ["verify-failed-last"])
 
 
+def test_skills_are_counted_by_name_and_a_failed_load_flags_the_card(env):
+    st = env["build"]({
+        _stem(1): (_wb(CARD_A), [(_at(10, 1), "skill pstack:tdd", 1), (_at(10, 2), "skill missing --fail", 1),
+                                 (_at(10, 3), "skill pstack:tdd", 1), (_at(10, 4), "pytest", 1)]),
+        _stem(2): (_wb(CARD_B), [(_at(10, 1), "skill pstack:how", 1)]),
+    })
+    doc = _digest(st, [
+        _card(CARD_A, "Skills", [_attempt("a", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0)),
+        _card(CARD_B, "Clean", [_attempt("b", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0)),
+    ])
+    cards = _by_id(doc)
+    assert cards[CARD_A]["totals"]["skills"] == {
+        "missing": {"calls": 1, "failed": 1},
+        "pstack:tdd": {"calls": 2, "failed": 0},
+    }
+    assert cards[CARD_A]["flags"] == ["skill-load-failed"]
+    assert cards[CARD_B]["totals"]["skills"] == {"pstack:how": {"calls": 1, "failed": 0}}
+    assert cards[CARD_B]["flags"] == []
+    md = fd.render_markdown(doc)
+    assert "- **skill-load-failed**: Skills (missing)" in md.splitlines()
+
+
 def test_a_refused_check_is_not_a_check_that_ran(env):
     st = env["build"]({_stem(1): (_wb(CARD_A), [
         (_at(10, 1), "edit", 1), (_at(10, 2), "pytest", 1), (_at(10, 3), "edit", 1), (_at(10, 4), "deny pytest", 1),
@@ -339,7 +364,7 @@ _METRICS = {
     "type": ["object", "null"],
     "additionalProperties": False,
     "required": ["peakContext", "compactions", "costUsd", "tokens", "requests", "calls", "errors", "retries",
-                 "delays", "edits", "verify", "stops"],
+                 "delays", "edits", "verify", "stops", "skills"],
     "properties": {
         **{k: {"type": "integer"} for k in ("peakContext", "compactions", "tokens", "requests", "calls",
                                             "retries", "delays", "edits")},
@@ -355,6 +380,9 @@ _METRICS = {
                                   "lastVerifyFailed": {"type": ["boolean", "null"]}}},
         "stops": {"type": "object", "additionalProperties": False, "required": ["permissionDenied", "blocked"],
                   "properties": {"permissionDenied": {"type": "integer"}, "blocked": {"type": "integer"}}},
+        "skills": {"type": "object", "additionalProperties": {
+            "type": "object", "additionalProperties": False, "required": ["calls", "failed"],
+            "properties": {"calls": {"type": "integer"}, "failed": {"type": "integer"}}}},
     },
 }
 _STR_OR_NULL = {"type": ["string", "null"]}

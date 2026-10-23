@@ -38,6 +38,7 @@ Flag = Literal[
     "stopped-on-permission",
     "attempt-fidelity-mismatch",
     "no-transcript",
+    "skill-load-failed",
 ]
 FLAGS: tuple[Flag, ...] = (
     "no-verify-after-edit",
@@ -45,6 +46,7 @@ FLAGS: tuple[Flag, ...] = (
     "stopped-on-permission",
     "attempt-fidelity-mismatch",
     "no-transcript",
+    "skill-load-failed",
 )
 _ATTEMPT_STATUSES = ("running", "succeeded", "failed", "blocked", "stopped")
 _MS = (int, float)  # Workboard timestamps are epoch milliseconds
@@ -315,6 +317,11 @@ class Stops(TypedDict):
     blocked: int
 
 
+class SkillUse(TypedDict):
+    calls: int
+    failed: int
+
+
 class Metrics(TypedDict):
     peakContext: int
     compactions: int
@@ -328,6 +335,7 @@ class Metrics(TypedDict):
     edits: int
     verify: Verify
     stops: Stops
+    skills: dict[str, SkillUse]
 
 
 class AttemptDigest(TypedDict):
@@ -406,6 +414,12 @@ def metrics(events: list[dict[str, Any]]) -> Metrics:
     edits = [e for e in events if e["kind"] == "edit"]
     verifies = [e for e in events if e["kind"] == "verify" and e.get("errClass") not in _DENIALS]
     after = [e for e in verifies if edits and e["seq"] > edits[-1]["seq"]]
+    skills: dict[str, SkillUse] = {}
+    for e in events:
+        if e["kind"] == "skill":
+            use = skills.setdefault(str(e.get("skill") or ""), {"calls": 0, "failed": 0})
+            use["calls"] += 1
+            use["failed"] += 1 if e.get("err") else 0
     return {
         "peakContext": max((e["in"] + e["cw"] + e["cr"] for e in llm if e["agent"] == "main"), default=0),
         "compactions": sum(1 for e in events if e["kind"] == "compaction"),
@@ -426,6 +440,7 @@ def metrics(events: list[dict[str, Any]]) -> Metrics:
             "permissionDenied": by_class.get("permission_denied", 0),
             "blocked": by_class.get("blocked", 0),
         },
+        "skills": dict(sorted(skills.items())),
     }
 
 
@@ -479,6 +494,10 @@ def _attempt_digest(a: Attempt, slice_: list[Timed]) -> AttemptDigest:
     }
 
 
+def _failed_skills(totals: Metrics | None) -> list[str]:
+    return [name for name, use in totals["skills"].items() if use["failed"]] if totals else []
+
+
 def card_flags(totals: Metrics | None, attempts: list[AttemptDigest]) -> list[Flag]:
     if totals is None:
         return ["no-transcript"]
@@ -488,6 +507,7 @@ def card_flags(totals: Metrics | None, attempts: list[AttemptDigest]) -> list[Fl
         "stopped-on-permission": any(a["stoppedOnDenial"] for a in attempts),
         "attempt-fidelity-mismatch": any(a["fidelity"] == "mismatch" for a in attempts),
         "no-transcript": False,
+        "skill-load-failed": bool(_failed_skills(totals)),
     }
     return [f for f in FLAGS if raised[f]]
 
@@ -562,6 +582,13 @@ def _cell(text: str) -> str:
     return text.replace("|", "\\|").replace("\n", " ")
 
 
+def _flag_entry(flag: Flag, card: CardDigest) -> str:
+    title = _cell(card["title"] or card["cardId"])
+    if flag == "skill-load-failed":
+        return f"{title} ({_cell(', '.join(_failed_skills(card['totals'])))})"
+    return title
+
+
 def render_markdown(doc: FactoryDigest) -> str:
     w = doc["window"]
     lines = [
@@ -592,7 +619,7 @@ def render_markdown(doc: FactoryDigest) -> str:
         lines += ["", "## Flags", ""]
         for f, cards in flagged:
             if cards:
-                lines.append(f"- **{f}**: " + "; ".join(_cell(c["title"] or c["cardId"]) for c in cards))
+                lines.append(f"- **{f}**: " + "; ".join(_flag_entry(f, c) for c in cards))
     if doc["unmatchedSessions"]:
         lines += ["", f"{len(doc['unmatchedSessions'])} factory sessions belong to cards not in the input."]
     return "\n".join(lines) + "\n"
