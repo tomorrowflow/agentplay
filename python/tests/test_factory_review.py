@@ -282,7 +282,7 @@ def test_malformed_comments_rounds_and_reviews_are_dropped_and_the_card_still_di
     card = _parsed(rounds, reviews, comments)
     assert card.rounds == (fd.Round(0, "c0", 1000, None, ()), fd.Round(2, None, None, None, ()))
     assert [(c.id, c.body) for c in card.comments] == [("ok", "a/b.py:3"), ("b", "")]
-    assert fd.card_digest(card, [])["cardId"] == CARD
+    assert fd.card_digest(card, [], {})["cardId"] == CARD
     assert fd.parse_cards({"card": {"id": CARD, "metadata": {"comments": "x", "automation": {"target": {
         "worktree": {"rounds": "x"}}}}}})[0].comments == ()
 

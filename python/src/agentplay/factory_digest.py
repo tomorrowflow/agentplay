@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Literal, TextIO, TypedDict
 
 from .builder import _NON_CALL_KINDS, _error_source, classify_outcome
+from .skill_inventory import installed_skills, pulled_at
 from .store import Store, _atomic_write
 
 DIGEST_SCHEMA = "agentplay-factory-digest/v1"
@@ -268,6 +269,12 @@ class Session:
     card_id: str
     started_ms: int
     events: tuple[dict[str, Any], ...]
+    home: Path  # the node's ~/.claude, or its folder in the transcript archive
+
+
+def home_of(source_path: str) -> Path:
+    """The folder above ``projects/`` in ``<home>/projects/<project>/<session>.jsonl``."""
+    return Path(source_path).parent.parent.parent
 
 
 def card_id_of(source_path: str) -> str | None:
@@ -288,14 +295,15 @@ def load_sessions(store: Store) -> list[Session]:
     """Main factory sessions in the store; subagents are already inside their parent's map."""
     out = []
     for row in store.rows():
-        card = card_id_of(str(row.get("sourcePath") or ""))
+        source = str(row.get("sourcePath") or "")
+        card = card_id_of(source)
         if card is None or row.get("role") in ("subagent", "helper"):
             continue
         doc = store.get(row["sessionId"])
         started = ((doc or {}).get("session") or {}).get("startedAt")
         if doc is None or not started:
             continue
-        out.append(Session(row["sessionId"], card, _ms(started), tuple(doc.get("events", []))))
+        out.append(Session(row["sessionId"], card, _ms(started), tuple(doc.get("events", [])), home_of(source)))
     return out
 
 
@@ -338,6 +346,18 @@ class Metrics(TypedDict):
     skills: dict[str, SkillUse]
 
 
+class SkillLoadFailure(TypedDict):
+    name: str
+    node: str
+    installed: bool | None  # None when the node has no skill inventory
+    installedAs: list[str]
+
+
+class NodeSkills(TypedDict):
+    pulledAt: str | None
+    skills: list[str]
+
+
 class AttemptDigest(TypedDict):
     id: str
     status: AttemptStatus
@@ -367,6 +387,7 @@ class CardDigest(TypedDict):
     attempts: list[AttemptDigest]
     unattributed: Metrics | None
     flags: list[Flag]
+    skillLoadFailures: list[SkillLoadFailure]
 
 
 Window = TypedDict("Window", {"from": str, "to": str, "days": int})  # `from` is a keyword
@@ -378,6 +399,7 @@ class FactoryDigest(TypedDict):
     window: Window
     cards: list[CardDigest]
     unmatchedSessions: list[str]
+    nodes: dict[str, NodeSkills]
 
 
 # --------------------------------------------------------------------------- metrics
@@ -512,7 +534,38 @@ def card_flags(totals: Metrics | None, attempts: list[AttemptDigest]) -> list[Fl
     return [f for f in FLAGS if raised[f]]
 
 
-def card_digest(card: Card, sessions: list[Session]) -> CardDigest:
+def _leaf(skill: str) -> str:
+    return skill.rpartition(":")[2]
+
+
+def skill_load_failures(sessions: list[Session], nodes: dict[str, NodeSkills]) -> list[SkillLoadFailure]:
+    """One entry per failed skill and the node of the session that called it."""
+    pairs = sorted({
+        (str(e.get("skill") or ""), s.home.name)
+        for s in sessions for e in s.events if e["kind"] == "skill" and e.get("err")
+    })
+    out: list[SkillLoadFailure] = []
+    for name, node in pairs:
+        inv = nodes.get(node)
+        skills = inv["skills"] if inv and inv["pulledAt"] is not None else None
+        out.append({
+            "name": name,
+            "node": node,
+            "installed": None if skills is None else name in skills,
+            "installedAs": [k for k in skills or [] if k != name and _leaf(k) == _leaf(name)],
+        })
+    return out
+
+
+def node_skills(sessions: list[Session]) -> dict[str, NodeSkills]:
+    homes = {s.home.name: s.home for s in sessions}
+    return {
+        node: {"pulledAt": pulled_at(home), "skills": sorted(installed_skills(home) or ())}
+        for node, home in sorted(homes.items())
+    }
+
+
+def card_digest(card: Card, sessions: list[Session], nodes: dict[str, NodeSkills]) -> CardDigest:
     events = timeline(sessions)
     slices, rest = split_attempts(events, card.attempts)
     attempts = [_attempt_digest(a, slices[a.id]) for a in card.attempts]
@@ -533,6 +586,7 @@ def card_digest(card: Card, sessions: list[Session]) -> CardDigest:
         "attempts": attempts,
         "unattributed": metrics([t.event for t in rest]) if rest else None,
         "flags": card_flags(totals, attempts),
+        "skillLoadFailures": skill_load_failures(sessions, nodes),
     }
 
 
@@ -561,12 +615,14 @@ def build_digest(
         select_cards(cards, now_ms=now_ms, days=days, prefixes=prefixes),
         key=lambda c: (c.published_at or 0, c.id),
     )
+    nodes = node_skills([s for c in chosen for s in by_card.get(c.id, [])])
     return {
         "schema": DIGEST_SCHEMA,
         "builtAt": iso(now_ms) or "",
         "window": {"from": iso(now_ms - days * DAY_MS) or "", "to": iso(now_ms) or "", "days": days},
-        "cards": [card_digest(c, by_card.get(c.id, [])) for c in chosen],
+        "cards": [card_digest(c, by_card.get(c.id, []), nodes) for c in chosen],
         "unmatchedSessions": sorted(s.id for s in sessions if s.card_id not in known),
+        "nodes": nodes,
     }
 
 
@@ -585,8 +641,14 @@ def _cell(text: str) -> str:
 def _flag_entry(flag: Flag, card: CardDigest) -> str:
     title = _cell(card["title"] or card["cardId"])
     if flag == "skill-load-failed":
-        return f"{title} ({_cell(', '.join(_failed_skills(card['totals'])))})"
+        return f"{title} ({_cell('; '.join(map(_failure, card['skillLoadFailures'])))})"
     return title
+
+
+def _failure(f: SkillLoadFailure) -> str:
+    state = {None: "no inventory", True: "installed", False: "not installed"}[f["installed"]]
+    hint = f", installed as {', '.join(f['installedAs'])}" if f["installedAs"] else ""
+    return f"{f['name']} on {f['node']}: {state}{hint}"
 
 
 def render_markdown(doc: FactoryDigest) -> str:
@@ -620,6 +682,11 @@ def render_markdown(doc: FactoryDigest) -> str:
         for f, cards in flagged:
             if cards:
                 lines.append(f"- **{f}**: " + "; ".join(_flag_entry(f, c) for c in cards))
+    if doc["nodes"]:
+        lines += ["", "## Node skills", ""]
+        for node, inv in doc["nodes"].items():
+            got = f"{len(inv['skills'])} skills, pulled {inv['pulledAt'][:10]}" if inv["pulledAt"] else "no inventory"
+            lines.append(f"- {_cell(node)} ({got})")
     if doc["unmatchedSessions"]:
         lines += ["", f"{len(doc['unmatchedSessions'])} factory sessions belong to cards not in the input."]
     return "\n".join(lines) + "\n"

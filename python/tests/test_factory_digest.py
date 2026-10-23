@@ -40,8 +40,8 @@ def _iso(dt: datetime) -> str:
 Step = tuple[datetime, str, int]
 
 
-def _write_session(home: Path, project: str, stem: str, steps: list[Step]) -> None:
-    proj = home / ".claude" / "projects" / project
+def _write_session(claude_home: Path, project: str, stem: str, steps: list[Step]) -> None:
+    proj = claude_home / "projects" / project
     proj.mkdir(parents=True, exist_ok=True)
     cwd = "/home/factory/factory-worktrees/wb"
 
@@ -113,9 +113,13 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTPLAY_HOME", str(tmp_path / "sm"))
     monkeypatch.delenv("AGENTPLAY_CLAUDE_HOMES", raising=False)
 
-    def build(sessions: dict[str, tuple[str, list[Step]]]) -> Store:
+    def build(sessions: dict[str, tuple[str, list[Step]]], nodes: dict[str, Path] | None = None) -> Store:
+        """``nodes`` maps a session stem to the archive node folder it lives in, instead of ~/.claude."""
+        nodes = nodes or {}
         for stem, (project, steps) in sessions.items():
-            _write_session(home, project, stem, steps)
+            _write_session(nodes.get(stem, home / ".claude"), project, stem, steps)
+        if nodes:
+            monkeypatch.setenv("AGENTPLAY_CLAUDE_HOMES", ",".join(str(p) for p in {*nodes.values(), home / ".claude"}))
         st = Store(tmp_path / "sm")
         pipeline.build_all(agents={"claude-code"}, store=st)
         return Store(tmp_path / "sm")
@@ -253,7 +257,58 @@ def test_skills_are_counted_by_name_and_a_failed_load_flags_the_card(env):
     assert cards[CARD_B]["totals"]["skills"] == {"pstack:how": {"calls": 1, "failed": 0}}
     assert cards[CARD_B]["flags"] == []
     md = fd.render_markdown(doc)
-    assert "- **skill-load-failed**: Skills (missing)" in md.splitlines()
+    assert "- **skill-load-failed**: Skills (missing on .claude: no inventory)" in md.splitlines()
+
+
+def _node_home(archive: Path, node: str, *, plugin_skills: list[str], stamped: bool = True) -> Path:
+    home = archive / node
+    root = home / "plugins" / "cache" / "mattpocock" / "mattpocock-skills" / "1.0.0"
+    for skill in plugin_skills:
+        (root / "skills" / skill).mkdir(parents=True)
+        (root / "skills" / skill / "SKILL.md").write_text("---\nname: x\n---\n")
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text(json.dumps({"name": "mattpocock-skills"}))
+    (home / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "mattpocock-skills@mattpocock": [{"installPath": f"/home/factory/.claude/{root.relative_to(home)}"}]}}))
+    if stamped:
+        (home / "skills-pulled-at").write_text("2026-10-16T02:00:00Z\n")
+    return home
+
+
+def test_a_failed_skill_says_whether_its_node_had_it_installed_and_under_which_name(env):
+    archive = env["tmp"] / "factory-transcripts"
+    mini = _node_home(archive, "linux-factory-mini", plugin_skills=["grilling", "tdd"])
+    bare = _node_home(archive, "linux-factory-bare", plugin_skills=["grilling"], stamped=False)
+    st = env["build"]({
+        _stem(1): (_wb(CARD_A), [(_at(10, 1), "skill grilling --fail", 1), (_at(10, 2), "skill mattpocock-skills:tdd --fail", 1)]),
+        _stem(2): (_wb(CARD_B), [(_at(10, 1), "skill grilling --fail", 1)]),
+        _stem(3): (_wb(CARD_A), [(_at(10, 0, 30), "pytest", 1)]),
+    }, nodes={_stem(1): mini, _stem(2): bare, _stem(3): bare})
+    doc = _digest(st, [
+        _card(CARD_A, "Mini", [_attempt("a", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0)),
+        _card(CARD_B, "Bare", [_attempt("b", "succeeded", _at(10, 0), _at(10, 30))], published=_at(11, 0)),
+    ])
+    cards = _by_id(doc)
+    assert cards[CARD_A]["skillLoadFailures"] == [
+        {"name": "grilling", "node": "linux-factory-mini", "installed": False,
+         "installedAs": ["mattpocock-skills:grilling"]},
+        {"name": "mattpocock-skills:tdd", "node": "linux-factory-mini", "installed": True, "installedAs": []},
+    ]
+    assert cards[CARD_B]["skillLoadFailures"] == [
+        {"name": "grilling", "node": "linux-factory-bare", "installed": None, "installedAs": []},
+    ]
+    assert doc["nodes"] == {
+        "linux-factory-bare": {"pulledAt": None, "skills": []},
+        "linux-factory-mini": {"pulledAt": "2026-10-16T02:00:00Z",
+                               "skills": ["mattpocock-skills:grilling", "mattpocock-skills:tdd"]},
+    }
+    md = fd.render_markdown(doc).splitlines()
+    assert ("- **skill-load-failed**: Mini (grilling on linux-factory-mini: not installed, installed as "
+            "mattpocock-skills:grilling; mattpocock-skills:tdd on linux-factory-mini: installed); "
+            "Bare (grilling on linux-factory-bare: no inventory)") in md
+    assert md[md.index("## Node skills"):] == [
+        "## Node skills", "", "- linux-factory-bare (no inventory)", "- linux-factory-mini (2 skills, pulled 2026-10-16)",
+    ]
 
 
 def test_a_refused_check_is_not_a_check_that_ran(env):
@@ -389,19 +444,22 @@ _STR_OR_NULL = {"type": ["string", "null"]}
 DIGEST_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["schema", "builtAt", "window", "cards", "unmatchedSessions"],
+    "required": ["schema", "builtAt", "window", "cards", "unmatchedSessions", "nodes"],
     "properties": {
         "schema": {"const": "agentplay-factory-digest/v1"},
         "builtAt": {"type": "string"},
         "window": {"type": "object", "additionalProperties": False, "required": ["from", "to", "days"],
                    "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "days": {"type": "integer"}}},
         "unmatchedSessions": {"type": "array", "items": {"type": "string"}},
+        "nodes": {"type": "object", "additionalProperties": {
+            "type": "object", "additionalProperties": False, "required": ["pulledAt", "skills"],
+            "properties": {"pulledAt": _STR_OR_NULL, "skills": {"type": "array", "items": {"type": "string"}}}}},
         "cards": {"type": "array", "items": {
             "type": "object",
             "additionalProperties": False,
             "required": ["cardId", "title", "labels", "status", "publishedAt", "pullRequestUrl", "headCommit",
                          "baseCommit", "reworkRound", "reviews", "sessions", "totals", "attempts", "unattributed",
-                         "flags"],
+                         "flags", "skillLoadFailures"],
             "properties": {
                 "cardId": {"type": "string"}, "title": {"type": "string"}, "status": {"type": "string"},
                 "labels": {"type": "array", "items": {"type": "string"}},
@@ -411,6 +469,12 @@ DIGEST_SCHEMA = {
                 "sessions": {"type": "array", "items": {"type": "string"}},
                 "totals": _METRICS, "unattributed": _METRICS,
                 "flags": {"type": "array", "items": {"enum": list(fd.FLAGS)}},
+                "skillLoadFailures": {"type": "array", "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["name", "node", "installed", "installedAs"],
+                    "properties": {"name": {"type": "string"}, "node": {"type": "string"},
+                                   "installed": {"type": ["boolean", "null"]},
+                                   "installedAs": {"type": "array", "items": {"type": "string"}}}}},
                 "attempts": {"type": "array", "items": {
                     "type": "object",
                     "additionalProperties": False,
