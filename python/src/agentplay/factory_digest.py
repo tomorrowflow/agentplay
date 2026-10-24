@@ -656,6 +656,9 @@ def _flag_entry(flag: Flag, card: CardDigest) -> str:
 
 
 def _failure(f: SkillLoadFailure, base: str | None) -> str:
+    # OpenClaw starts factory runs with --setting-sources user, so the Skill tool never sees project skills.
+    if f["inRepo"] and base is not None and not f["installed"]:
+        return f"{f['name']} on {f['node']}: project skill at {base[:7]}, which factory runs cannot load"
     state = {None: "no inventory", True: "installed", False: "not installed"}[f["installed"]]
     hint = f", installed as {', '.join(f['installedAs'])}" if f["installedAs"] else ""
     repo = "" if f["inRepo"] is None or base is None else f", {'in' if f['inRepo'] else 'not in'} repo at {base[:7]}"
