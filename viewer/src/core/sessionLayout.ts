@@ -821,7 +821,9 @@ export const DEFAULT_CATEGORIES: readonly Category[] = ['prompt', 'error'];
 const EXPLORE_KINDS = new Set(['read', 'search']);
 const MODEL_KINDS = new Set(['llm', 'model_switch']);
 const isMcp = (e: SessionMapEvent) => e.kind === 'mcp' || e.cat === 'mcp';
-const isSkill = (e: SessionMapEvent) => e.kind === 'skill' || e.cat === 'skill';
+/** A skill read from its SKILL.md file counts too: the Skill tool can't load repo skills in factory runs. */
+const isSkill = (e: SessionMapEvent) =>
+  e.kind === 'skill' || e.cat === 'skill' || (e.kind === 'read' && !!e.skill);
 /** A tool call that no more specific call category claims -- including
  * Outputs: an `exec` that opened a PR is an output, not "another tool". */
 const isOtherTool = (e: SessionMapEvent) =>

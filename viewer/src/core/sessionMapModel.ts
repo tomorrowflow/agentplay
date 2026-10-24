@@ -441,7 +441,7 @@ export function buildTree(map: SessionMap): SessionTree {
       );
       add(s, `mcp:${e.server}/${e.tool ?? ''}`, e.tool ?? 'tool', 'mcptool');
     }
-    if (e.kind === 'skill' && e.skill) {
+    if ((e.kind === 'skill' || e.kind === 'read') && e.skill) {
       add(group('g:skill', 'skills'), `skill:${e.skill}`, e.skill, 'skill');
     }
     if (e.kind === 'web' && e.host) {
@@ -911,7 +911,7 @@ export function countersAt(
     if (NON_CALL.has(e.kind)) continue;
     c.calls++;
     if (e.kind === 'mcp') c.mcp++;
-    if (e.kind === 'skill') c.skills++;
+    if (e.kind === 'skill' || (e.kind === 'read' && e.skill)) c.skills++;
     if (e.kind === 'subagent') c.subagents++;
     for (const t of e.targets ?? []) {
       if (t.scope || t.file == null) continue;
@@ -1447,6 +1447,12 @@ export function describeEvent(
         return {
           title: `${vcsActionLabel(e.vcs.action)}${e.vcs.repo ? ` · ${e.vcs.repo}` : ''}${e.vcs.number != null ? ` #${e.vcs.number}` : ''}`,
           detail: `${tool}${verb}${prTail}`,
+        };
+      }
+      if (e.kind === 'read' && e.skill) {
+        return {
+          title: `/${e.skill}`,
+          detail: `Skill read from ${fo ? `${repo}/${fo.path}` : (place?.label ?? 'its SKILL.md')}`,
         };
       }
       if (fo) {

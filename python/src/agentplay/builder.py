@@ -1166,6 +1166,13 @@ _ARTIFACT_OK = re.compile(r"claude\.ai/(?:code/)?artifact/[A-Za-z0-9-]+")
 _ARTIFACT_VERSION = re.compile(r"\(Version (\d+)\)")
 _PR_REF = re.compile(r"([\w.-]+/[\w.-]+)#(\d+)|pull request #(\d+)|/pull/(\d+)", re.I)
 _SKILL_FILE = re.compile(r"(?:^|/)skills/([^/]{1,80})/SKILL\.md$")
+_SKILLS_DIR = re.compile(r"(?:^|/)skills/.+/SKILL\.md$")
+
+
+def _read_skill(path: str) -> str | None:
+    """The skill a read of ``path`` loads: a ``SKILL.md`` anywhere under a ``skills/`` folder."""
+    p = path.replace(os.sep, "/")
+    return skill_name_from_skill_md_path(p) if _SKILLS_DIR.search(p) else None
 _FAILED_TEXT = re.compile(
     r"^\W*(?:error\b|x\b|failed\b|fatal:|gh: |graphql: )|is not mergeable|could not|"
     r"not found|permission denied|unauthorized|forbidden|\"isError\"\s*:\s*true",
@@ -1768,6 +1775,11 @@ class MapBuilder:
         elif kind == "web":
             url = str((inp or {}).get("url") or "")
             ev["host"] = _url_host(url) or "search"
+        elif kind == "read":
+            # Factory runs can't load repo skills with the Skill tool, so they read SKILL.md instead.
+            skill = next(filter(None, (_read_skill(p) for p in paths)), None)
+            if skill:
+                ev["skill"] = skill
         ops = file_ops(tool, inp if isinstance(inp, dict) else {}, cwd)
         if tool == "Write" and paths:
             ops.setdefault(os.path.normpath(paths[0]), "write")

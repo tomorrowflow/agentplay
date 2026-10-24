@@ -962,6 +962,15 @@ describe('event categories', () => {
     expect(categoryMatches(plainExec, 'tool')).toBe(true);
   });
 
+  it('counts a SKILL.md read as Skill as well as Exploration', () => {
+    const [skillRead, plainRead] = makeMap([
+      { kind: 'read', skill: 'verify-ios' },
+      { kind: 'read' },
+    ]).events;
+    expect(CATEGORIES.filter((c) => categoryMatches(skillRead, c))).toEqual(['explore', 'skill']);
+    expect(categoryMatches(plainRead, 'skill')).toBe(false);
+  });
+
   it('starts on Prompts + Errors, and knows when a selection narrows', () => {
     expect([...DEFAULT_CATEGORIES]).toEqual(['prompt', 'error']);
     expect(isDefaultCategories(new Set(DEFAULT_CATEGORIES))).toBe(true);
