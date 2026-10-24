@@ -59,6 +59,33 @@ def test_claude_metadata_only_file_is_quietly_skipped(tmp_path: Path, caplog) ->
     assert source.discovery_stats()["claude-code"]["skipped"] == {"no_conversation": 1}
 
 
+def test_claude_continued_session_stub_is_quietly_skipped(tmp_path: Path, caplog) -> None:
+    # A session that ran only a local command, then went on in another session:
+    # the shape Claude Code leaves behind, `continued-in` last.
+    home, slug = _claude_home(tmp_path)
+    sid = "s1"
+    (slug / "stub.jsonl").write_bytes(
+        _jsonl([
+            {"type": "last-prompt", "leafUuid": "u1", "sessionId": sid},
+            {"type": "mode", "mode": "normal", "sessionId": sid},
+            {"type": "permission-mode", "permissionMode": "default", "sessionId": sid},
+            {"type": "system", "subtype": "local_command", "content": "<command-name>/x</command-name>",
+             "sessionId": sid, "timestamp": "2026-10-14T15:36:00Z"},
+            {"type": "attachment", "attachment": {}, "sessionId": sid},
+            {"type": "cost-state", "totalCostUSD": 0, "sessionId": sid},
+            {"type": "continued-in", "continuedInSessionId": "s2", "sessionId": sid,
+             "timestamp": "2026-10-14T15:36:01Z"},
+        ])
+    )
+    source = LocalSource(claude_code_homes=[home], codex_homes=[])
+
+    with caplog.at_level(logging.DEBUG):
+        source.discover_sessions()
+
+    assert _warnings(caplog) == []
+    assert source.discovery_stats()["claude-code"]["skipped"] == {"no_conversation": 1}
+
+
 def test_conversational_file_no_agent_claims_still_warns(tmp_path: Path, caplog) -> None:
     home, slug = _claude_home(tmp_path)
     # A user turn without the `sessionId` every known shape carries: format drift.
