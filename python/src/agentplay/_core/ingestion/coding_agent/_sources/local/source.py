@@ -357,6 +357,7 @@ _NON_CONVERSATION_TYPES = frozenset(
         "agent-name",
         "ai-title",
         "attachment",
+        "continued-in",
         "cost-state",
         "file-history-snapshot",
         "last-prompt",
