@@ -819,6 +819,35 @@ def test_malformed_repo_roots_are_rejected(value):
         sm.parse_repo_roots(value)
 
 
+def test_a_read_of_a_skill_file_names_the_skill(tmp_path):
+    ts = lambda s: f"2026-09-10T01:00:{s:02d}Z"  # noqa: E731
+
+    def call(s, tid, name, inp):
+        return {
+            "type": "assistant",
+            "timestamp": ts(s),
+            "cwd": "/w",
+            "message": {
+                "id": f"m{s}",
+                "model": "claude-sonnet-5",
+                "usage": {"output_tokens": 1},
+                "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}],
+            },
+        }
+
+    rows = [
+        {"type": "user", "timestamp": ts(0), "cwd": "/w", "message": {"role": "user", "content": "go"}},
+        call(1, "t1", "Read", {"file_path": ".claude/skills/verify-ios/SKILL.md"}),
+        call(2, "t2", "Bash", {"command": "cat /home/f/.claude/skills/productivity/grill-me/SKILL.md"}),
+        call(3, "t3", "Read", {"file_path": "features/verify-ios/SKILL.md"}),
+        call(4, "t4", "Read", {"file_path": "skills/README.md"}),
+    ]
+    doc = sm.build_claude_code_map(_jsonl(tmp_path / "q" / "s.jsonl", rows))
+    assert [(e["kind"], e.get("skill")) for e in doc["events"] if e.get("tool") in ("Read", "Bash")] == [
+        ("read", "verify-ios"), ("read", "grill-me"), ("read", None), ("read", None),
+    ]
+
+
 def test_skill_events_count_typed_loads_once_and_keep_model_calls_as_is(tmp_path):
     ts = lambda s: f"2026-09-10T01:00:{s:02d}Z"  # noqa: E731
 

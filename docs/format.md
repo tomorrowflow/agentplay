@@ -164,7 +164,7 @@ Every event has these fields:
 
 | kind | extra fields |
 |---|---|
-| `read`, `search`, `edit`, `exec`, `verify` | `tool`, `verb` (shell only), `targets[]`, `outBytes`, `dur`, `vcs?` |
+| `read`, `search`, `edit`, `exec`, `verify` | `tool`, `verb` (shell only), `targets[]`, `outBytes`, `dur`, `vcs?`, `skill?` (on a `read` of a `SKILL.md` under a `skills/` folder: the folder that holds it, the way agents load a skill the Skill tool can't see) |
 | `mcp` | `server`, `tool`, `outBytes`, `dur` |
 | `skill` | `skill`, `typed?` (`true` when the user started the skill by typing `/name`; absent when the model called the Skill tool) |
 | `subagent` | `subagentType`, `model?`, `child` (agent id) |
