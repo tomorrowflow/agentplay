@@ -204,13 +204,15 @@ class RepoResolver:
     """
 
     def __init__(self, roots: tuple[RepoRoot, ...] | None = None) -> None:
-        self._roots = parse_repo_roots(os.environ.get("AGENTPLAY_REPO_ROOTS", "")) if roots is None else roots
+        self._configured = parse_repo_roots(os.environ.get("AGENTPLAY_REPO_ROOTS", "")) if roots is None else roots
         self._cache: dict[str, tuple[str, str, str] | None] = {}
+        # name -> root, most recently resolved last, so a shared name keeps the latest checkout.
+        self._roots: dict[str, str] = {}
 
     def resolve(self, path: str) -> tuple[str, str, str] | None:
         p = Path(path)
         parts = p.parts
-        for pattern, slug in self._roots:
+        for pattern, slug in self._configured:
             n = len(pattern)
             if len(parts) >= n and all(fnmatch.fnmatchcase(a, b) for a, b in zip(parts, pattern, strict=False)):
                 return (str(Path(*parts[:n])), slug.rsplit("/", 1)[-1], slug)
@@ -232,7 +234,17 @@ class RepoResolver:
             d = d.parent
         for k in seen:
             self._cache[k] = result
+        if result:
+            self._roots.pop(result[1], None)
+            self._roots[result[1]] = result[0]
         return result
+
+    def roots(self) -> dict[str, str]:
+        """Repo name -> checkout root for every repo resolved so far (local use only).
+
+        When two checkouts share a name, the one resolved most recently wins.
+        """
+        return dict(self._roots)
 
     @staticmethod
     def _remote(root: Path, git: Path) -> tuple[str, str]:

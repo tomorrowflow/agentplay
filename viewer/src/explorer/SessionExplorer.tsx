@@ -36,6 +36,7 @@ import { useDebounce } from '@/hooks/useDebounce';
 import {
   useSessionExplorerMap,
   useSessionExplorerSessions,
+  useSessionExplorerStatus,
 } from '@/data/hooks';
 import { WINDOW_OPTIONS, type WindowKey } from '@/core/windowOptions';
 import { ExplorerToolbar } from './ExplorerToolbar';
@@ -77,7 +78,7 @@ import {
   scopedModelUsage,
   taskNoun,
 } from '@/core/sessionScope';
-import { sessionWindowRange } from '@/core/sessionWindow';
+import { useWindowRange } from '@/data/windowRange';
 import { useEventCategories } from './useEventCategories';
 import { useExplorerScope, type ExplorerScope } from './useExplorerScope';
 import { useMapModel, usePlaybackWindow } from './usePlaybackWindow';
@@ -90,40 +91,6 @@ interface Props {
   /** optional control under the "No session maps yet" empty state (e.g. an
    * "Open a map file" button) */
   emptyAction?: ReactNode;
-}
-
-/** A cache-busting key that changes at EITHER the viewer's local midnight
- * or UTC midnight, whichever comes first (not a real ISO date). Two
- * different fields of `sessionWindowRange`'s result roll over on two
- * different clocks: `daysThisMonth` derives MTD's `from` from local
- * `getDate()`, but `to` (every window) is `toISOString().slice(0, 10)`,
- * a UTC date. A key on only one clock stays stale across the other
- * boundary for up to the viewer's UTC offset. */
-const dateBoundaryKey = (d: Date) =>
-  `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.toISOString().slice(0, 10)}`;
-
-/** The list's date range for `windowKey`, kept fresh across midnight. */
-function useWindowRange(windowKey: WindowKey) {
-  // `sessionWindowRange` is keyed off `new Date()` at call time, but a memo
-  // keyed only on `windowKey` never re-runs that call once the tab has been
-  // open a while - the range (mtd's start, and every window's `to`) goes
-  // stale after a real calendar day rolls over while the page stays mounted
-  //. A cheap poll refreshes it within a minute of that,
-  // keyed by both clocks it can roll over on (see `dateBoundaryKey`).
-  const [today, setToday] = useState(() => dateBoundaryKey(new Date()));
-  useEffect(() => {
-    const id = setInterval(() => {
-      const next = dateBoundaryKey(new Date());
-      setToday((prev) => (prev === next ? prev : next));
-    }, 60_000);
-    return () => clearInterval(id);
-  }, []);
-  return useMemo(
-    // `today` is not read in the body; it exists purely to invalidate this
-    // memo once the poll above notices the calendar date has moved on.
-    () => sessionWindowRange(windowKey, new Date()),
-    [windowKey, today]
-  );
 }
 
 /** The sessions in the window (search-filtered), the effective selection,
@@ -145,29 +112,7 @@ function useExplorerSessions(windowKey: WindowKey) {
     [list.data]
   );
   const listIds = useMemo(() => sessions.map((s) => s.sessionId), [sessions]);
-  const listed = sessions.some((s) => s.sessionId === selected);
-  // A linked session (an OpenClaw card's `/card/<id>` lands here) can be
-  // pages deep; load pages until it turns up instead of showing the newest.
-  // Not while searching: a search that drops the selection should not walk
-  // every page of its results.
-  const seeking =
-    !!selected &&
-    !listed &&
-    !debouncedSearch &&
-    !!list.hasNextPage &&
-    !list.isFetchNextPageError;
-  const { isFetchingNextPage, fetchNextPage } = list;
-  // Keyed on the page count too: a fast page can land without a render ever
-  // seeing `isFetchingNextPage` flip.
-  const pages = list.data?.pages.length ?? 0;
-  useEffect(() => {
-    if (seeking && !isFetchingNextPage) void fetchNextPage();
-  }, [seeking, isFetchingNextPage, fetchNextPage, pages]);
-  const selectedId = listed
-    ? selected
-    : seeking
-      ? null
-      : (sessions[0]?.sessionId ?? null);
+  const selectedId = selected || sessions[0]?.sessionId || null;
   const selectedRow = sessions.find((s) => s.sessionId === selectedId) ?? null;
   const mapQuery = useSessionExplorerMap(selectedId, listIds);
   return {
@@ -177,7 +122,6 @@ function useExplorerSessions(windowKey: WindowKey) {
     setSelected,
     debouncedSearch,
     list,
-    seeking,
     sessions,
     selectedId,
     selectedRow,
@@ -238,7 +182,10 @@ export function SessionExplorer({
 }: Props) {
   const data = useExplorerSessions(windowKey);
   const { list, sessions, selectedId } = data;
+  const scanning = !!useSessionExplorerStatus().data?.scanning;
   const [, setScopeParams] = useQueryStates(SCOPE_PARAMS);
+  // A search chip opens its session at the matching event (`useSeekParam`).
+  const [, setJumpAt] = useQueryState('at', parseAsInteger);
   // One sidebar: the list until a session is picked (or one is linked), then
   // only that session; "All sessions" flips back without touching the URL.
   const [sidebarMode, setSidebarMode] = useState<'list' | 'session'>(() =>
@@ -254,7 +201,7 @@ export function SessionExplorer({
   );
   const setCollapsed = setSidebarCollapsed;
 
-  if ((list.isLoading && !list.data) || data.seeking)
+  if (list.isLoading && !list.data)
     return (
       <div className="flex flex-col gap-3">
         <SessionExplorerSkeleton />
@@ -276,19 +223,35 @@ export function SessionExplorer({
     <WindowSelect windowKey={windowKey} onChange={onWindowChange} />
   ) : null;
 
-  if (!sessions.length && !data.debouncedSearch && !list.hasNextPage) {
+  const showLinked = !!data.selected && !scanning;
+  if (
+    !sessions.length &&
+    !data.debouncedSearch &&
+    !list.hasNextPage &&
+    !showLinked
+  ) {
     // The window select lives in the sidebar, which this state replaces, so
     // it is rendered here too -- otherwise "try a longer window" would have
     // no control to act on.
     return (
       <div className="flex flex-col gap-3">
         {windowSelect ? <div className="w-48">{windowSelect}</div> : null}
-        <EmptyState
-          icon={<MapTrifold size={24} weight="duotone" />}
-          title="No session maps yet"
-          description="Session maps appear here once a coding-agent session has been indexed. Try a longer window if you expected one."
-          action={emptyAction}
-        />
+        {scanning ? (
+          // The first scan is still running: "none yet" would be a false
+          // answer. The list fills in by itself as maps land.
+          <EmptyState
+            icon={<MapTrifold size={24} weight="duotone" />}
+            title="Scanning your sessions…"
+            description="agentplay is building maps from your coding-agent sessions. They appear here as they are ready."
+          />
+        ) : (
+          <EmptyState
+            icon={<MapTrifold size={24} weight="duotone" />}
+            title="No session maps yet"
+            description="Session maps appear here once a coding-agent session has been indexed. Try a longer window if you expected one."
+            action={emptyAction}
+          />
+        )}
       </div>
     );
   }
@@ -316,6 +279,20 @@ export function SessionExplorer({
       loadingMore={list.isFetchingNextPage}
       onLoadMore={() => void list.fetchNextPage()}
       unavailable={data.mapQuery.unavailable}
+      onJump={(id, seq) => {
+        // Always clear: a task, model or subagent scope may not contain the hit's event.
+        void setScopeParams(CLEAR_SCOPE_PARAMS);
+        void data.setSelected(id);
+        void setJumpAt(seq);
+      }}
+      searchNote={
+        list.data?.pages[0]?.searchNote?.code === 'arguments' ? (
+          <p role="note" className="rounded-md bg-ds-warning-subtlest px-2 py-1.5 ds-text-body-xs-medium text-ds-warning-darker">
+            Command arguments are never stored, so they can&rsquo;t be searched. Showing sessions that ran{' '}
+            <code className="font-mono">{list.data.pages[0].searchNote.command}</code>.
+          </p>
+        ) : null
+      }
       header={
         <SessionListHeader
           count={sessions.length}

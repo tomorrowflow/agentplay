@@ -52,6 +52,8 @@
     --primitive-gray-300: #bdbdbd;
     --primitive-gray-400: #989898;
     --primitive-gray-500: #7b7b7b;
+    --primitive-gray-600: #707070;
+    --primitive-gray-700: #575757;
     --primitive-gray-800: #404040;
     --primitive-gray-900: #2c2c2c;
     --primitive-purple-100: #ece8ff;
@@ -83,8 +85,8 @@
     --ds-border-default: var(--primitive-gray-800);
     --ds-border-darker: var(--primitive-gray-900);
 
-    --ds-text-subtler: var(--primitive-gray-300);
-    --ds-text-subtle: var(--primitive-gray-500);
+    --ds-text-subtler: var(--primitive-gray-600);
+    --ds-text-subtle: var(--primitive-gray-700);
     --ds-text-default: var(--primitive-gray-800);
     --ds-text-darker: var(--primitive-gray-900);
 
@@ -224,6 +226,8 @@
     --primitive-gray-300: #525252;
     --primitive-gray-400: #656565;
     --primitive-gray-500: #7b7b7b;
+    --primitive-gray-600: #919191;
+    --primitive-gray-700: #b5b5b5;
     --primitive-gray-800: #dbdbdb;
     --primitive-gray-900: #efeef0;
     /* Purple: dark-mode values of the semantic purple ramp. */

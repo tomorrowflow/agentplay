@@ -8,6 +8,8 @@ import type {
   SessionExplorerStatus,
   SessionMap,
 } from '@/core/schema';
+import type { InsightsStats } from '@/core/insights';
+import type { AutotuneStatus, FixPreview, HealthReport } from '@/core/health';
 
 export interface SessionsParams {
   /** inclusive UTC `YYYY-MM-DD` */
@@ -57,6 +59,20 @@ export interface SessionMapSource {
    * recording machine, so absent on sources that never have them (file, demo).
    */
   reviews?(sessionId: string): Promise<ReviewDoc[]>;
+  /**
+   * Optional. Per-session facts for the Insights view, for root sessions in
+   * the range (inclusive UTC `YYYY-MM-DD`; omitted = all time). Absent on a
+   * source with no precomputed facts (opened files).
+   */
+  stats?(range: { from?: string; to?: string }): Promise<InsightsStats>;
+  /** Optional, local server only: Run health and its fixes for the range. */
+  health?(range: { from?: string; to?: string }): Promise<HealthReport>;
+  /** Optional, local server only: a fix action's file before and after. */
+  fixPreview?(p: { fix: string; i: number; file?: string; from?: string; to?: string }): Promise<FixPreview>;
+  /** Optional, local server only: Autotune's settings, queue and log. */
+  autotune?(): Promise<AutotuneStatus>;
+  /** Optional, local server only: a write (`/api/fix`, `/api/repos`, `/api/autotune`). */
+  write?(path: '/api/fix' | '/api/repos' | '/api/autotune', body: Record<string, unknown>): Promise<unknown>;
 }
 
 /** Max ids per `maps()` call. */

@@ -63,7 +63,7 @@ export function fileSource(): FileSource {
     async status() {
       const rows = [...docs.values()].map((d) => d.row);
       const latest = rows.map((r) => r.sessionDate ?? '').sort().pop() || null;
-      return { success: true, available: rows.length > 0, mapCount: rows.length, latestSessionDate: latest };
+      return { success: true, available: rows.length > 0, mapCount: rows.length, latestSessionDate: latest, scanning: false };
     },
     async sessions(params) {
       return listRows([...docs.values()].map((d) => d.row), params);

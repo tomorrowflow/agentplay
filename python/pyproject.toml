@@ -4,14 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentplay"
-version = "0.2.1"
+version = "0.2.4"
 description = "Replay your coding-agent sessions (Claude Code, Codex, Cursor, Copilot, OpenCode, Kiro) as a map and a timeline. Local only."
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11"
 authors = [{ name = "Entelligence AI" }]
-keywords = ["claude-code", "codex", "cursor", "copilot", "coding-agent", "observability", "developer-tools"]
+keywords = ["claude-code", "codex", "cursor", "copilot", "github-copilot", "opencode", "kiro", "coding-agent", "ai-agents", "llm", "session-replay", "agent-observability", "observability", "developer-tools"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -28,6 +28,7 @@ dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/Entelligence-AI/agentplay"
+Documentation = "https://github.com/Entelligence-AI/agentplay#readme"
 Issues = "https://github.com/Entelligence-AI/agentplay/issues"
 Source = "https://github.com/Entelligence-AI/agentplay"
 Security = "https://github.com/Entelligence-AI/agentplay/security/policy"

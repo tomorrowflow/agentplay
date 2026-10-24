@@ -1,7 +1,8 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   keepPreviousData,
   useInfiniteQuery,
+  useMutation,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -17,8 +18,14 @@ import { useSessionMapSource } from './SourceContext';
 export const sessionExplorerStatusKey = (sourceId: string) =>
   ['sessionExplorerStatus', sourceId] as const;
 
+/** How often to re-ask while the server is still scanning. */
+const SCANNING_POLL_MS = 2000;
+/** The slower re-ask after a failed status call, while it still says scanning. */
+const SCANNING_ERROR_POLL_MS = 30_000;
+
 /** Whether the injected source has any maps. Fails closed: any error reads
- * as "not available" in the caller. */
+ * as "not available" in the caller. Polls while the server reports a scan
+ * in progress, and stops once it is done. */
 export function useSessionExplorerStatus() {
   const source = useSessionMapSource();
   return useQuery({
@@ -26,6 +33,13 @@ export function useSessionExplorerStatus() {
     queryFn: () => source.status(),
     staleTime: 3 * 60 * 1000,
     retry: false,
+    // An error keeps the last `scanning: true` in `data`, so a stopped server
+    // would be polled every 2s forever. Back off instead of stopping, so a
+    // server restarted on the same port is picked up again.
+    refetchInterval: (q) => {
+      if (!q.state.data?.scanning) return false;
+      return q.state.status === 'error' ? SCANNING_ERROR_POLL_MS : SCANNING_POLL_MS;
+    },
   });
 }
 
@@ -37,6 +51,23 @@ export function useSessionExplorerSessions(
   enabled = true
 ) {
   const source = useSessionMapSource();
+  const queryClient = useQueryClient();
+  // A background scan adds sessions after the list first loaded: refetch it
+  // whenever the count moves or the scan ends. The first answer is only
+  // recorded, so a cold load does not fetch the list twice.
+  const status = useSessionExplorerStatus();
+  const stamp = status.data ? `${status.data.mapCount}:${status.data.scanning}` : null;
+  const lastStamp = useRef<string | null>(null);
+  useEffect(() => {
+    if (stamp == null) return;
+    const prev = lastStamp.current;
+    lastStamp.current = stamp;
+    if (prev != null && prev !== stamp) {
+      void queryClient.invalidateQueries({
+        queryKey: ['sessionExplorerSessions', source.id],
+      });
+    }
+  }, [stamp, queryClient, source.id]);
   return useInfiniteQuery({
     queryKey: [
       'sessionExplorerSessions',
@@ -233,5 +264,75 @@ export function useSessionReviews(sessionId: string) {
     enabled: !!reviews,
     retry: false,
     staleTime: 60 * 1000,
+  });
+}
+
+/** Per-session facts for the Insights view over a date range. Refetches when
+ * a background scan adds maps, like the session list. Disabled on a source
+ * without `stats` (opened files). */
+export function useInsightsStats(range: { from?: string; to?: string }) {
+  const source = useSessionMapSource();
+  const status = useSessionExplorerStatus();
+  const stamp = status.data ? `${status.data.mapCount}:${status.data.scanning}` : '';
+  return useQuery({
+    queryKey: ['insightsStats', source.id, range.from ?? '', range.to ?? '', stamp] as const,
+    queryFn: () => {
+      if (!source.stats) throw new SessionExplorerError('Insights need the local store', 'unsupported');
+      return source.stats(range);
+    },
+    enabled: !!source.stats,
+    staleTime: 60 * 1000,
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/** Run health for a range. Local server only. */
+export function useHealth(range: { from?: string; to?: string }) {
+  const source = useSessionMapSource();
+  const status = useSessionExplorerStatus();
+  // Same as Insights: a scan adding maps changes the score, so it changes the key.
+  const stamp = status.data ? `${status.data.mapCount}:${status.data.scanning}` : '';
+  return useQuery({
+    queryKey: ['health', source.id, range.from ?? '', range.to ?? '', stamp] as const,
+    queryFn: () => {
+      if (!source.health) throw new SessionExplorerError('Run health needs the local CLI', 'unsupported');
+      return source.health(range);
+    },
+    enabled: !!source.health,
+    staleTime: 30 * 1000,
+    placeholderData: keepPreviousData,
+    retry: false,
+  });
+}
+
+/** Autotune status. Local server only. */
+export function useAutotune() {
+  const source = useSessionMapSource();
+  return useQuery({
+    queryKey: ['autotune', source.id] as const,
+    queryFn: () => {
+      if (!source.autotune) throw new SessionExplorerError('Autotune needs the local CLI', 'unsupported');
+      return source.autotune();
+    },
+    enabled: !!source.autotune,
+    staleTime: 15 * 1000,
+    retry: false,
+  });
+}
+
+/** A write to the local server; refreshes health and Autotune afterwards. */
+export function useWrite() {
+  const source = useSessionMapSource();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { path: '/api/fix' | '/api/repos' | '/api/autotune'; body: Record<string, unknown> }) => {
+      if (!source.write) throw new SessionExplorerError('Writing fixes needs the local CLI', 'unsupported');
+      return source.write(v.path, v.body);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['health'] });
+      void queryClient.invalidateQueries({ queryKey: ['autotune'] });
+    },
   });
 }

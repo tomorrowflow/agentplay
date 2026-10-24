@@ -3,7 +3,7 @@ import tailwindPlugin from 'tailwindcss/plugin';
 import type { Config } from 'tailwindcss';
 
 /** Design token colors mapped to primitive CSS vars. */
-const ds = {
+export const ds = {
   gray: {
     lightest: 'var(--primitive-gray-50)',
     subtlest: 'var(--primitive-gray-100)',
@@ -58,8 +58,8 @@ const ds = {
   },
   text: {
     subtlest: 'var(--primitive-gray-100)',
-    subtler: 'var(--primitive-gray-300)',
-    subtle: 'var(--primitive-gray-500)',
+    subtler: 'var(--primitive-gray-600)',
+    subtle: 'var(--primitive-gray-700)',
     default: 'var(--primitive-gray-800)',
     darker: 'var(--primitive-gray-900)',
   },

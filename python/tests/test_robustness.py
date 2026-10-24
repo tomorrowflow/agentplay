@@ -124,12 +124,12 @@ def test_malformed_origin_is_403_json(httpd, origin) -> None:
 
 
 @pytest.mark.parametrize("path", ["/api/account", "/api/status", "/"])
-def test_every_post_is_405_even_from_the_local_viewer(httpd, path) -> None:
+def test_a_post_outside_the_write_endpoints_is_404(httpd, path) -> None:
     port = httpd.server_address[1]
     headers = {"Host": "localhost", "Origin": f"http://localhost:{port}", "Content-Type": "application/json"}
     status, body = _request(httpd, "POST", headers, path)
-    assert status == 405
-    assert body["code"] == "method_not_allowed"
+    assert status == 404
+    assert body["code"] == "not_found"
 
 
 def test_local_host_with_a_valid_port_still_passes(httpd) -> None:

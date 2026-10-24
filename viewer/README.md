@@ -62,7 +62,9 @@ at a server on another origin.
 All answers are camelCase JSON, validated by the zod schemas in
 `src/core/schema.ts`:
 
-- `GET /api/status` -> `{success, available, mapCount, latestSessionDate}`
+- `GET /api/status` -> `{success, available, mapCount, latestSessionDate,
+  scanning}`; while `scanning` is true the viewer polls it and refreshes the
+  session list as maps land
 - `GET /api/sessions?from=&to=&search=&pageSize=50&cursor=` ->
   `{success, sessions: [row], nextCursor, hasMore}`
 - `GET /api/map?session_id=A&session_id=B` -> `{success, expiresIn, maps:
