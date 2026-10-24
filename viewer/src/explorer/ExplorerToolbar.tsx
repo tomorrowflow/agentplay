@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { CaretDown, Check } from '@phosphor-icons/react';
 import { Button } from '@/components/ui/button';
 import {
@@ -103,12 +103,14 @@ function Picker({
   value,
   active,
   width = 'w-80',
+  initialFocus,
   children,
 }: {
   label: string;
   value: string;
   active: boolean;
   width?: string;
+  initialFocus?: RefObject<HTMLElement | null>;
   children: (close: () => void) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -129,7 +131,11 @@ function Picker({
           </Button>
         }
       />
-      <PopoverContent align="start" className={cn(width, 'p-0')}>
+      <PopoverContent
+        align="start"
+        initialFocus={initialFocus}
+        className={cn(width, 'p-0')}
+      >
         {children(() => setOpen(false))}
       </PopoverContent>
     </Popover>
@@ -244,16 +250,18 @@ function AgentPicker({ agents, lens, lensLabel, onLens }: Props) {
 }
 
 function ModelPicker({ models, model, onModel }: Props) {
+  const list = useRef<HTMLDivElement>(null);
   return (
     <Picker
       label="Model"
       value={model ?? 'All models'}
       active={model != null}
       width="w-72"
+      initialFocus={list}
     >
       {(close) => (
-        <Command>
-          <CommandList className="max-h-[320px]">
+        <Command defaultValue={model ?? 'all models'}>
+          <CommandList ref={list} label="Models" className="max-h-[320px]">
             <CommandGroup>
               <CommandItem
                 value="all models"

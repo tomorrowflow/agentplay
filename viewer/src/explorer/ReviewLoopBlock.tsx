@@ -220,7 +220,7 @@ function ReviewCommentCard({
           aria-pressed={picked}
           aria-label={`Light the path to ${file} ${line} on the map`}
           onClick={onPick}
-          className="-m-1 flex cursor-pointer flex-col gap-1.5 rounded p-1 text-left transition-colors hover:bg-ds-gray-subtlest focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ds-brand-subtler"
+          className="-m-1 flex cursor-pointer flex-col gap-1.5 rounded p-1 text-left transition-colors hover:bg-ds-gray-subtlest focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ds-brand-subtle focus-visible:ring-offset-1 focus-visible:ring-offset-ds-surface-white"
         >
           {body}
         </button>

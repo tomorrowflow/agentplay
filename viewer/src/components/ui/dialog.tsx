@@ -13,6 +13,12 @@ const DialogTitle = DialogPrimitive.Title;
 
 const DialogDescription = DialogPrimitive.Description;
 
+const DialogPortal = DialogPrimitive.Portal;
+
+const DialogViewport = DialogPrimitive.Viewport;
+
+const DialogPopup = DialogPrimitive.Popup;
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Popup>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Popup>
@@ -36,6 +42,9 @@ export {
   DialogClose,
   DialogContent,
   DialogDescription,
+  DialogPopup,
+  DialogPortal,
   DialogTitle,
   DialogTrigger,
+  DialogViewport,
 };

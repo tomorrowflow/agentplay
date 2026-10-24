@@ -1,0 +1,23 @@
+name: Support a new agent
+description: Ask for (or offer to write) a parser for another coding agent.
+labels: [enhancement]
+body:
+  - type: input
+    id: agent
+    attributes:
+      label: Agent
+      placeholder: Gemini CLI, Amp, Cline, Roo, Windsurf, Aider, ...
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where it stores sessions
+      description: The folder or database, on which OS, and its format (JSONL, SQLite, ...) if you know it.
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I can write the parser (see CONTRIBUTING.md, "Adding an agent")
+        - label: I can provide a small redacted fixture transcript

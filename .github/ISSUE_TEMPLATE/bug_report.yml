@@ -1,0 +1,33 @@
+name: Bug report
+description: Something broke, a session didn't parse, or the viewer shows something wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      placeholder: Claude Code 2.1.0, Codex 0.50, Cursor 2.0, ...
+  - type: input
+    id: env
+    attributes:
+      label: agentplay version, OS and Python
+      description: "`agentplay --version`, then your OS and `python --version`."
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Terminal output
+      description: Output of the command that failed. Check it for anything private before posting.
+      render: text
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a raw transcript.** If a session doesn't parse, a small fixture with personal content removed is the most useful thing you can attach.
